@@ -40,6 +40,28 @@ OPEN_ATTACKS_ATTEMPTS_DEFAULT = int(os.getenv("OPEN_ATTACKS_ATTEMPTS_DEFAULT", "
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("clanbot")
 
+# --- Version aus Docker-ENV lesen ---
+STARTUP_CHAT_ID = int(os.getenv("STARTUP_CHAT_ID", "0") or 0)
+
+def _read_version() -> dict:
+    return {
+        "sha": os.getenv("BOT_VERSION_SHA", "dev"),
+        "ref": os.getenv("BOT_VERSION_REF", "local"),
+        "time": os.getenv("BOT_VERSION_TIME", "unknown"),
+        "author": os.getenv("BOT_VERSION_AUTHOR", "unknown"),
+        "msg": (os.getenv("BOT_VERSION_MSG", "") or "").strip(),
+    }
+
+def _format_version(v: dict) -> str:
+    short = v["sha"][:7]
+    note = f"\n📝 {v['msg']}" if v["msg"] else ""
+    return (
+        f"🔧 <b>Bot-Version</b>\n"
+        f"• Commit: <code>{short}</code> ({v['ref']})\n"
+        f"• Autor: {v['author']}\n"
+        f"• Build: {v['time']}{note}"
+    )
+
 # Einmaligen Clash-Client erstellen
 clash = ClashClient(CLASH_TOKEN, CLAN_TAG)
 
@@ -51,6 +73,31 @@ async def setup_commands(app: Application) -> None:
     log.info("Commands via Bot-API registriert (Scopes: Group, Private).")
 
 # ----------------- Command-Handler -----------------
+async def version_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.effective_chat.send_message(
+        _format_version(_read_version()), parse_mode=ParseMode.HTML, disable_web_page_preview=True
+    )
+
+async def on_startup(app: Application):
+    # Commands zuerst registrieren
+    await setup_commands(app)
+
+    # Startmeldung in definierte Chat-ID schicken (Gruppe/DM), wenn gesetzt
+    if STARTUP_CHAT_ID:
+        v = _read_version()
+        short = v["sha"][:7]
+        text = (
+            f"🚀 <b>Bot gestartet</b>\n"
+            f"• Commit: <code>{short}</code> ({v['ref']})\n"
+            f"• Autor: {v['author']}\n"
+            f"• Build: {v['time']}\n"
+            f"{'📝 ' + v['msg'] if v['msg'] else ''}"
+        )
+        try:
+            await app.bot.send_message(STARTUP_CHAT_ID, text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        except Exception as e:
+            log.warning("Konnte Startmeldung nicht senden: %s", e)
+
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot läuft und hört zu!")
 
@@ -144,6 +191,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     # Commands registrieren
+    app.add_handler(CommandHandler("version", version_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("start", status_cmd))  # Alias
     app.add_handler(CommandHandler("hilfe", hilfe_cmd))
@@ -158,7 +206,7 @@ def main():
     app.add_handler(CommandHandler("spenden", spenden_cmd))
 
     # Commands beim Start in Telegram setzen
-    app.post_init = setup_commands
+    app.post_init = on_startup
 
     log.info("Bot startet (Polling)…")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
