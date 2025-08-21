@@ -52,7 +52,7 @@ async def setup_commands(app: Application) -> None:
 
 # ----------------- Command-Handler -----------------
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot läuft und hört zu!")
+    await update.message.reply_text("✅ Bot läuft und hört zu! (mit neuer Pipeline :D)")
 
 async def hilfe_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.effective_chat.send_message(
@@ -145,6 +145,7 @@ def main():
 
     # Commands registrieren
     app.add_handler(CommandHandler("status", status_cmd))
+    app.add_handler(CommandHandler("start", status_cmd))  # Alias
     app.add_handler(CommandHandler("hilfe", hilfe_cmd))
     app.add_handler(CommandHandler("commands", hilfe_cmd))   # Alias
     app.add_handler(CommandHandler("claninfo", claninfo_cmd))
