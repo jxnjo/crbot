@@ -23,8 +23,9 @@ from clash import (
     fmt_river_scoreboard,
     fmt_donations_leaderboard,
     fmt_open_decks_overview,
-    fmt_war_history_summary,      # NEU
+    fmt_war_history_summary,      
     fmt_war_history_player,       # NEU
+    fmt_war_history_player_multi, # NEU
 )
 
 # Optional: zentrale Command-Liste/Hilfe aus commands.py
@@ -191,12 +192,23 @@ async def krieghistorie_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     log_data = await clash.get_river_log(limit=50)
     if context.args:
         query = " ".join(context.args).strip()
-        msg = fmt_war_history_player(log_data, CLAN_TAG, query)
+        from clash import fmt_war_history_player_multi
+        msgs = fmt_war_history_player_multi(log_data, CLAN_TAG, query)
+        if len(msgs) > 1:
+            await update.effective_chat.send_message(
+                f"⚠️ Es wurden {len(msgs)} Spieler mit dem Namen '{query}' gefunden:",
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True
+            )
+        for msg in msgs:
+            await update.effective_chat.send_message(
+                msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True
+            )
     else:
         msg = fmt_war_history_summary(log_data, CLAN_TAG)
-    await update.effective_chat.send_message(
-        msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True
-    )
+        await update.effective_chat.send_message(
+            msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True
+        )
 
 # ----------------- Main -----------------
 def main():

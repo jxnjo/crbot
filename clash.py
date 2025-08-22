@@ -411,3 +411,35 @@ def fmt_war_history_player(rlog: Dict[str, Any], my_tag_nohash: str, query: str)
         f"Angriffe gesamt: Decks {e['decks']}  |  Boot {e['boats']}",
     ]
     return "\n".join(lines)[:4096]
+
+def fmt_war_history_player_multi(rlog: Dict[str, Any], my_tag_nohash: str, query: str) -> List[str]:
+    acc = _aggregate_war_history(rlog, my_tag_nohash)
+    if not acc:
+        return ["Keine Kriegshistorie verfügbar."]
+
+    q = query.strip().lower()
+    # Erst exakte Namens-Treffer, dann enthält, dann Tag-Match
+    exact = [(t,e) for t,e in acc.items() if e["name"].lower() == q]
+    part  = [(t,e) for t,e in acc.items() if q in e["name"].lower()]
+    tagm  = [(t,e) for t,e in acc.items() if q.replace("#","") == t.lower()]
+
+    cand = exact or part or tagm
+    if not cand:
+        suggestions = ", ".join(sorted({e["name"] for _,e in list(acc.items())[:10]}))
+        return [f"Kein Treffer für „{query}“. Vorschläge: {suggestions}"]
+
+    results = []
+    for tag, e in cand:
+        total_pts = e["fame"] + e["repair"]
+        since = _fmt_date(e["first_seen"])
+        last  = _fmt_date(e["last_seen"]) if e["last_seen"] else "unbekannt"
+        lines = [
+            f"📖 <b>Kriegshistorie – {e['name']}</b>",
+            f"Tag: #{tag}",
+            f"Seit: {since}  |  Letzte Teilnahme: {last}",
+            f"Teilgenommene Kriege: {e['wars']}",
+            f"Punkte gesamt: <b>{total_pts}</b> (Fame: {e['fame']}, Repair: {e['repair']})",
+            f"Angriffe gesamt: Decks {e['decks']}  |  Boot {e['boats']}",
+        ]
+        results.append("\n".join(lines)[:4096])
+    return results
