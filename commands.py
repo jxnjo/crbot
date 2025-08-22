@@ -8,6 +8,7 @@ COMMANDS_GROUP = [
     BotCommand("krieginfo", "Punktevergleich (auto) – Tipp: /krieginfo [heute|gesamt]"),
     BotCommand("krieginfoheute", "Punktevergleich nur für heute (Tagespunkte)"),
     BotCommand("krieginfogesamt", "Punktevergleich gesamt (Wochenpunkte)"),
+    BotCommand("krieghistorie", "Kriegshistorie (optional Name: /krieghistorie Max)"),  # NEU
     BotCommand("hilfe", "Zeigt alle Befehle"),
 ]
 
@@ -17,6 +18,7 @@ COMMANDS_PRIVATE = [
     BotCommand("krieginfo", "Punktevergleich (auto)"),
     BotCommand("krieginfoheute", "Punktevergleich: heute"),
     BotCommand("krieginfogesamt", "Punktevergleich: gesamt"),
+    BotCommand("krieghistorie", "Kriegshistorie (optional mit Name)"),  # NEU
     BotCommand("hilfe", "Zeigt alle Befehle"),
 ]
 
@@ -30,6 +32,7 @@ def get_help_text() -> str:
         "/krieginfo – Punktevergleich (auto). Tipp: <i>/krieginfo heute</i> oder <i>/krieginfo gesamt</i>",
         "/krieginfoheute – Punktevergleich nur für heute (Tagespunkte)",
         "/krieginfogesamt – Punktevergleich gesamt (Wochenpunkte)",
+        "/krieghistorie – Gesamtübersicht der Beiträge im Clanwar (optional: Name für Detail)",
         "/hilfe – Diese Übersicht",
     ]
     return "\n".join(lines)

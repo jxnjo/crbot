@@ -23,6 +23,8 @@ from clash import (
     fmt_river_scoreboard,
     fmt_donations_leaderboard,
     fmt_open_decks_overview,
+    fmt_war_history_summary,      # NEU
+    fmt_war_history_player,       # NEU
 )
 
 # Optional: zentrale Command-Liste/Hilfe aus commands.py
@@ -183,6 +185,19 @@ async def spenden_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True
     )
 
+# --- NEU: /krieghistorie [Name?] ---
+async def krieghistorie_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Hole mehrere Wochen Log (z. B. 50 Einträge)
+    log_data = await clash.get_river_log(limit=50)
+    if context.args:
+        query = " ".join(context.args).strip()
+        msg = fmt_war_history_player(log_data, CLAN_TAG, query)
+    else:
+        msg = fmt_war_history_summary(log_data, CLAN_TAG)
+    await update.effective_chat.send_message(
+        msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True
+    )
+
 # ----------------- Main -----------------
 def main():
     if not BOT_TOKEN or not CLASH_TOKEN:
@@ -204,6 +219,7 @@ def main():
     app.add_handler(CommandHandler("krieginfoheute", krieginfo_heute_cmd))
     app.add_handler(CommandHandler("krieginfogesamt", krieginfo_gesamt_cmd))
     app.add_handler(CommandHandler("spenden", spenden_cmd))
+    app.add_handler(CommandHandler("krieghistorie", krieghistorie_cmd))  # NEU
 
     # Commands beim Start in Telegram setzen
     app.post_init = on_startup
