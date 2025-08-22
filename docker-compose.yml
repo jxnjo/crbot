@@ -1,0 +1,17 @@
+services:
+  crbot:
+    container_name: crbot
+    image: ghcr.io/jxnjo/crbot:latest
+    env_file: .env
+    environment:
+      - STARTUP_CHAT_ID=-4728976794
+      - TZ=Europe/Zurich
+    restart: unless-stopped
+
+  watchtower:
+    container_name: watchtower
+    image: containrrr/watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: crbot --interval 60 --cleanup
+    restart: unless-stopped

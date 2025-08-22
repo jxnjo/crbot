@@ -1,43 +1,58 @@
-name: Build and Push to Github
+name: Build & Push to GHCR
+
 on:
   push:
-    branches:
-      - main
+    branches: [ "main" ]
 
 env:
   REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build:
-    name: 'Build and Push to Github'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-      id-token: write
-
-    defaults:
-      run:
-        shell: bash
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-      - name: Log into registry ${{ env.REGISTRY }}
-        uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Push to Github
-        uses: docker/build-push-action@v2
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
         with:
-          platforms: linux/amd64,linux/arm64
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
           push: true
-          tags: ${{ env.REGISTRY }}/jxnjo/crbot:latest
-          file: Dockerfile
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_SHA=${{ github.sha }}
+            BUILD_REF=${{ github.ref_name }}
+            BUILD_TIME=${{ steps.meta.outputs.created }}
+            BUILD_AUTHOR=${{ github.event.head_commit.committer.name || github.actor }}
+            BUILD_MSG=${{ github.event.head_commit.message }}
