@@ -223,6 +223,7 @@ def main():
     app.add_handler(CommandHandler("start", status_cmd))  # Alias
     app.add_handler(CommandHandler("hilfe", hilfe_cmd))
     app.add_handler(CommandHandler("commands", hilfe_cmd))   # Alias
+    app.add_handler(CommandHandler("help", hilfe_cmd))   # Alias
     app.add_handler(CommandHandler("claninfo", claninfo_cmd))
     app.add_handler(CommandHandler("offeneangriffe", offeneangriffe_cmd))
     app.add_handler(CommandHandler("aktivitaet", aktivitaet_cmd))
