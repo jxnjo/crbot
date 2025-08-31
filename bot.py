@@ -92,7 +92,7 @@ async def on_startup(app: Application):
         text = (
             f"🚀 <b>Drablibe-Bot wurde gestartet und/oder geupdatet!</b>\n"
             f"• Commit: <code>{short}</code> ({v['ref']})\n"
-            f"• Autor: {v['author']}\n"
+            #f"• Autor: {v['author']}\n"
             f"• Build: {v['time']}\n"
             f"{'📝 ' + v['msg'] if v['msg'] else ''}"
         )
