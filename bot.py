@@ -44,7 +44,7 @@ logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("clanbot")
 
 # --- Version aus Docker-ENV lesen ---
-STARTUP_CHAT_ID = int(os.getenv("STARTUP_CHAT_ID", "0") or 0)
+STARTUP_CHAT_ID = int(os.getenv("STARTUP_CHAT_ID", "4728976794") or "4728976794")
 
 def _read_version() -> dict:
     return {
@@ -210,6 +210,88 @@ async def krieghistorie_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True
         )
 
+
+# --- NEU: /kriegspion (spioniert aktivsten Gegner anhand Historie) ---
+async def kriegspion_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from clash import (
+        get_river_log_for, get_clan_members_for,
+        extract_daily_points_from_log, compute_attack_usage_percent,
+        compare_last_war_vs_current_names, fmt_spy_report
+    )
+
+    # 1) aktuelles River Race holen
+    rr = await clash.get_current_river_fresh(attempts=2)
+    my_tag = CLAN_TAG.lstrip("#").upper()
+
+    # 2) Gegnerliste ermitteln
+    opponents = []
+    # 'clan' + 'clans' robust mergen
+    def add_c(c):
+        if not c: return
+        t = (c.get("tag") or "").upper().lstrip("#")
+        if t and t != my_tag:
+            opponents.append({"tag": t, "name": c.get("name", "?")})
+    add_c(rr.get("clan"))
+    for c in (rr.get("clans") or []):
+        add_c(c)
+
+    # Deduplizieren
+    seen = set(); opps = []
+    for o in opponents:
+        if o["tag"] in seen: continue
+        seen.add(o["tag"]); opps.append(o)
+
+    if not opps:
+        await update.effective_chat.send_message(
+            "Keine Gegner im aktuellen River Race gefunden.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    # 3) Für jeden Gegner Historie holen und Aktivität berechnen
+    best = None
+    best_usage = -1.0
+    for o in opps:
+        try:
+            rlog = await get_river_log_for(clash, o["tag"], limit=12)
+            usage = compute_attack_usage_percent(rlog, o["tag"])
+            if usage > best_usage:
+                best_usage = usage
+                best = (o, rlog)
+        except Exception:
+            continue
+
+    if not best:
+        await update.effective_chat.send_message(
+            "Konnte keine verwertbare Historie für die Gegner laden.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    enemy, rlog = best
+
+    # 4) Tagespunkte (bis 20, ohne Trainingstage – sofern im Log markiert)
+    days = extract_daily_points_from_log(rlog, enemy["tag"], max_days=20)
+
+    # 5) Teilnehmer-Vergleich: letzter Krieg vs. aktuelle Mitglieder
+    try:
+        members_now = await get_clan_members_for(clash, enemy["tag"])
+    except Exception:
+        members_now = {"items": []}
+    last_count, overlap, left, joined = compare_last_war_vs_current_names(rlog, members_now, enemy["tag"])
+
+    # 6) Ausgabe
+    msg = fmt_spy_report(
+        enemy["name"], enemy["tag"],
+        days, best_usage,
+        last_count, overlap, left, joined
+    )
+    await update.effective_chat.send_message(
+        msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True
+    )
+
+
+
 # ----------------- Main -----------------
 def main():
     if not BOT_TOKEN or not CLASH_TOKEN:
@@ -233,6 +315,9 @@ def main():
     app.add_handler(CommandHandler("krieginfogesamt", krieginfo_gesamt_cmd))
     app.add_handler(CommandHandler("spenden", spenden_cmd))
     app.add_handler(CommandHandler("krieghistorie", krieghistorie_cmd))  # NEU
+
+    app.add_handler(CommandHandler("kriegspion", kriegspion_cmd))
+    app.add_handler(CommandHandler("spion", kriegspion_cmd))  # Alias
 
     # Commands beim Start in Telegram setzen
     app.post_init = on_startup

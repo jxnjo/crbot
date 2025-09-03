@@ -443,3 +443,156 @@ def fmt_war_history_player_multi(rlog: Dict[str, Any], my_tag_nohash: str, query
         ]
         results.append("\n".join(lines)[:4096])
     return results
+
+# ==========================
+# Gegner-Analyse / Spionage
+# ==========================
+
+# --- Zusätzliche API-Calls für beliebige Clans ---
+async def get_river_log_for(client: ClashClient, clan_tag: str, limit: int = 10) -> Dict[str, Any]:
+    tag = clan_tag.lstrip("#").upper()
+    url = f"{client.BASE}/clans/%23{tag}/riverracelog"
+    headers = {
+        **client.headers,
+        "Cache-Control": "no-store, max-age=0",
+        "Pragma": "no-cache",
+    }
+    params = {"limit": limit, "ts": int(time.time() * 1000)}
+    async with httpx.AsyncClient(timeout=client.timeout) as http:
+        r = await http.get(url, headers=headers, params=params)
+        r.raise_for_status()
+        return r.json()
+
+async def get_clan_members_for(client: ClashClient, clan_tag: str) -> Dict[str, Any]:
+    tag = clan_tag.lstrip("#").upper()
+    url = f"{client.BASE}/clans/%23{tag}/members"
+    async with httpx.AsyncClient(timeout=client.timeout) as http:
+        r = await http.get(url, headers=client.headers)
+        r.raise_for_status()
+        return r.json()
+
+# --- interne Helfer ---
+def _find_standing_for_tag(item: Dict[str, Any], clan_tag_nohash: str) -> Dict[str, Any] | None:
+    tag = clan_tag_nohash.upper().lstrip("#")
+    for st in (item.get("standings") or []):
+        c = st.get("clan") or {}
+        if (c.get("tag") or "").upper().lstrip("#") == tag:
+            return st
+    return None
+
+def extract_daily_points_from_log(rlog: Dict[str, Any], clan_tag_nohash: str, max_days: int = 20) -> List[int]:
+    """
+    Versucht, Punkte pro Kriegstag aus dem RiverRace-Log zu extrahieren (ohne Trainingstage).
+    Fällt robust zurück (liefert ggf. leere Liste), falls die API-Struktur keine Tagespunkte enthält.
+    """
+    days: List[int] = []
+    for it in (rlog.get("items") or []):
+        st = _find_standing_for_tag(it, clan_tag_nohash)
+        if not st:
+            continue
+        # Suche nach möglichen 'period'-Listen (API variiert je Saison)
+        for key, val in st.items():
+            if isinstance(val, list) and val and isinstance(val[0], dict):
+                for d in val:
+                    typ = (d.get("type") or d.get("periodType") or "").lower()
+                    if "train" in typ:
+                        continue
+                    pts = int(d.get("points") or d.get("periodPoints") or d.get("fame") or 0)
+                    if pts > 0:
+                        days.append(pts)
+                        if len(days) >= max_days:
+                            return days[:max_days]
+        if len(days) >= max_days:
+            break
+    return days[:max_days]
+
+def compute_attack_usage_percent(rlog: Dict[str, Any], clan_tag_nohash: str, default_days: int = 4) -> float:
+    """
+    Ø pro Kriegstag genutzte Angriffe (über die letzten Logs).
+    Prozent = genutzte Decks / (Teilnehmer * 4 * Kriegstage) – pro Log, dann Ø.
+    Kriegstage werden aus Perioden (ohne Training) erkannt; falls nicht vorhanden -> default_days.
+    """
+    percents: List[float] = []
+    for it in (rlog.get("items") or []):
+        st = _find_standing_for_tag(it, clan_tag_nohash)
+        if not st:
+            continue
+        plist = st.get("clan", {}).get("participants") or st.get("participants") or []
+        num = len(plist)
+        total_decks = sum(int(p.get("decksUsed") or 0) for p in plist)
+
+        # Kriegstage zählen (ohne Training), falls möglich
+        day_count = 0
+        for key, val in st.items():
+            if isinstance(val, list) and val and isinstance(val[0], dict):
+                day_count = sum(
+                    1 for d in val
+                    if "train" not in ((d.get("type") or d.get("periodType") or "").lower())
+                )
+                if day_count:
+                    break
+        if day_count <= 0:
+            day_count = default_days
+
+        capacity = num * 4 * day_count
+        if capacity > 0:
+            percents.append(min(1.0, total_decks / capacity))
+    return (sum(percents) / len(percents)) if percents else 0.0
+
+def compare_last_war_vs_current_names(rlog: Dict[str, Any], members_payload: Dict[str, Any], clan_tag_nohash: str):
+    """
+    Vergleicht Teilnehmer des letzten Kriegs (aus Log) mit aktuellen Clan-Mitgliedern (names only).
+    """
+    items = rlog.get("items") or []
+    if not items:
+        return 0, 0, [], []
+
+    st = _find_standing_for_tag(items[0], clan_tag_nohash)
+    if not st:
+        return 0, 0, [], []
+
+    last_participants = (st.get("clan", {}).get("participants") or st.get("participants") or [])
+    last_names = sorted({p.get("name", "?") for p in last_participants})
+
+    cur_items = members_payload.get("items") or []
+    cur_names = sorted({m.get("name", "?") for m in cur_items})
+
+    last_set, cur_set = set(last_names), set(cur_names)
+    left   = sorted(last_set - cur_set)
+    joined = sorted(cur_set - last_set)
+    overlap = len(last_set & cur_set)
+
+    return len(last_names), overlap, left, joined
+
+def _bar(p: float, width: int = 10) -> str:
+    p = max(0.0, min(1.0, p))
+    n = int(round(p * width))
+    return "█" * n + "░" * (width - n)
+
+def fmt_spy_report(clan_name: str, clan_tag_nohash: str,
+                   daily_points: List[int],
+                   usage_avg: float,
+                   last_count: int, overlap: int,
+                   left: List[str], joined: List[str]) -> str:
+    lines: List[str] = []
+    lines.append(f"🕵️ <b>Gegner-Spionage</b>")
+    lines.append(f"Clan: <b>{clan_name}</b> (#{clan_tag_nohash})")
+    lines.append(f"Ø Angriffs-Auslastung/Tag: <b>{int(usage_avg*100)}%</b>  [{_bar(usage_avg)}]")
+
+    if daily_points:
+        mx = max(daily_points) or 1
+        lines.append("\n📈 Punkte je Kriegstag (zuletzt):")
+        # skaliere auf 10 Blöcke je Zeile
+        for pts in daily_points[:20]:
+            frac = pts / mx
+            lines.append(f"<code>{pts:>4} | {_bar(frac)}</code>")
+    else:
+        lines.append("\n📈 Keine expliziten Tagespunkte im Log gefunden.")
+
+    lines.append(f"\n👥 Teilnehmer im letzten Krieg: <b>{last_count}</b>  |  davon aktuell noch da: <b>{overlap}</b>")
+    if left:
+        lines.append(f"⬇️ Weg: {', '.join(left[:10])}{' …' if len(left) > 10 else ''}")
+    if joined:
+        lines.append(f"⬆️ Neu: {', '.join(joined[:10])}{' …' if len(joined) > 10 else ''}")
+
+    return "\n".join(lines)[:4096]

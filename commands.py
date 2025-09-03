@@ -24,15 +24,16 @@ COMMANDS_PRIVATE = [
 
 def get_help_text() -> str:
     lines = [
-        "🤖 <b>Verfügbare Befehle</b>\n",
-        "/status – Prüft, ob der Bot läuft",
-        "/claninfo – Claninfos",
-        "/offeneangriffe – Offene Kriegsangriffe (heute)",
-        "/aktivitaet – Am längsten offline → zuletzt online",
-        "/krieginfo – Punktevergleich (auto). Tipp: <i>/krieginfo heute</i> oder <i>/krieginfo gesamt</i>",
+        "🤖 <b>Verfügbare Befehle & Alternativen</b>\n",
+        "/status – Prüft, ob der Bot läuft (Alias: /start)",
+        "/claninfo – Zeigt aktuelle Claninfos von Drablibe",
+        "/offeneangriffe – Offene Kriegsangriffe heute (Versuche: 2, Alias: /offeneangriffe force)",
+        "/online – Zeigt Mitglieder nach letzter Online-Zeit (Alias: /aktivitaet)",
+        "/krieginfo – Punktevergleich (auto, Alias: /krieginfo heute /krieginfo gesamt)",
         "/krieginfoheute – Punktevergleich nur für heute (Tagespunkte)",
         "/krieginfogesamt – Punktevergleich gesamt (Wochenpunkte)",
-        "/krieghistorie – Gesamtübersicht der Beiträge im Clanwar (optional: Name für Detail)",
-        "/hilfe – Diese Übersicht",
+        "/spenden [Nummer|all] – Spenden-Übersicht, z.B. /spenden 5 für Top 5, /spenden all für alle",
+        "/krieghistorie [Name?] – Clanwar-Historie, optional mit Name für Details (z.B. /krieghistorie Max)",
+        "/hilfe – Diese Übersicht (Alias: /commands /help)",
     ]
     return "\n".join(lines)
