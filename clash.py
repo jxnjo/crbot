@@ -1,7 +1,7 @@
 import os
 import time
 import httpx
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timezone
 
 # zoneinfo + Fallback

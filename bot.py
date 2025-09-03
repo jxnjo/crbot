@@ -21,6 +21,7 @@ from clash import (
     fmt_river_scoreboard,
     fmt_donations_leaderboard,
     fmt_open_decks_overview,
+    fmt_war_history_summary,
     spy_make_messages,  # ← NEU: /spion
 )
 
