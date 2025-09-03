@@ -92,7 +92,7 @@ async def on_startup(app: Application):
         text = (
             f"🚀 <b>Drablibe-Bot wurde gestartet und/oder geupdatet!!</b>\n"
             f"• Commit: <code>{short}</code> ({v['ref']})\n"
-            f"• Autor: {v['author']}\n"
+            f"• Author: {v['author']}\n"
             f"• Build: {v['time']}\n"
             f"{'📝 ' + v['msg'] if v['msg'] else ''}"
         )
@@ -223,6 +223,7 @@ def main():
     app.add_handler(CommandHandler("start", status_cmd))  # Alias
     app.add_handler(CommandHandler("hilfe", hilfe_cmd))
     app.add_handler(CommandHandler("commands", hilfe_cmd))   # Alias
+    app.add_handler(CommandHandler("help", hilfe_cmd))   # Alias
     app.add_handler(CommandHandler("claninfo", claninfo_cmd))
     app.add_handler(CommandHandler("offeneangriffe", offeneangriffe_cmd))
     app.add_handler(CommandHandler("aktivitaet", aktivitaet_cmd))

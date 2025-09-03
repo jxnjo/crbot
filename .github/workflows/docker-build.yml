@@ -54,5 +54,5 @@ jobs:
             BUILD_SHA=${{ github.sha }}
             BUILD_REF=${{ github.ref_name }}
             BUILD_TIME=${{ steps.meta.outputs.created }}
-            BUILD_AUTHOR=${{ github.event.head_commit.committer.name || github.actor }}
+            BUILD_AUTHOR=${{ github.actor }}
             BUILD_MSG=${{ github.event.head_commit.message }}
