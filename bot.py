@@ -90,7 +90,7 @@ async def on_startup(app: Application):
         v = _read_version()
         short = v["sha"][:7]
         text = (
-            f"🚀 <b>Drablibe-Bot wurde gestartet und/oder geupdatet!</b>\n"
+            f"🚀 <b>Drablibe-Bot wurde gestartet und/oder geupdatet!!</b>\n"
             f"• Commit: <code>{short}</code> ({v['ref']})\n"
             f"• Autor: {v['author']}\n"
             f"• Build: {v['time']}\n"
