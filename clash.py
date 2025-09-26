@@ -1,312 +1,201 @@
+"""
+Refactored Clash Royale API Client.
+Konzentriert sich nur auf API-Kommunikation und Datenverarbeitung.
+Formatierungs-Funktionen wurden nach formatters.py ausgelagert.
+"""
 import os
 import time
 import httpx
-from typing import Dict, Any, List, Optional, Tuple
+import logging
+from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
+from config import config
+
+logger = logging.getLogger(__name__)
+from handlers import APIError
 
 # zoneinfo + Fallback
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 except Exception:
     ZoneInfo = None
-    class ZoneInfoNotFoundError(Exception): pass  # type: ignore[misc]
+    class ZoneInfoNotFoundError(Exception): 
+        pass
 
 def get_local_tz():
-    name = os.getenv("BOT_TZ", "Europe/Zurich")
+    """Gibt die lokale Zeitzone zurück."""
     if ZoneInfo is None:
         return timezone.utc
     try:
-        return ZoneInfo(name)
+        return ZoneInfo(config.BOT_TZ)
     except ZoneInfoNotFoundError:
         return timezone.utc
 
 LOCAL_TZ = get_local_tz()
 
 class ClashClient:
+    """Clash Royale API Client mit robustem Error-Handling."""
+    
     BASE = "https://api.clashroyale.com/v1"
 
-    def __init__(self, token: str, clan_tag: str, timeout: int = 15):
+    def __init__(self, token: str, clan_tag: str, timeout: int = None):
+        if not token:
+            raise ValueError("Clash Royale API Token ist erforderlich")
+        if not clan_tag:
+            raise ValueError("Clan Tag ist erforderlich")
+            
         self.token = token
         self.clan_tag = clan_tag.lstrip("#").upper()
-        self.timeout = timeout
+        self.timeout = timeout or config.API_TIMEOUT
         self.headers = {"Authorization": f"Bearer {self.token}"}
 
     def _clan_path(self, suffix: str = "") -> str:
+        """Erstellt den API-Pfad für den konfigurierten Clan."""
         tag = f"%23{self.clan_tag}"
         return f"{self.BASE}/clans/{tag}{suffix}"
 
     async def _get(self, url: str, cache_bust: bool = False) -> Dict[str, Any]:
+        """Führt einen HTTP GET-Request zur Clash Royale API aus."""
         headers = {
             **self.headers,
             "Cache-Control": "no-store, max-age=0",
             "Pragma": "no-cache",
         }
         params = {"ts": int(time.time() * 1000)} if cache_bust else None
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            r = await client.get(url, headers=headers, params=params)
-            r.raise_for_status()
-            return r.json()
+        
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(url, headers=headers, params=params)
+                response.raise_for_status()
+                return response.json()
+        except httpx.TimeoutException as e:
+            raise APIError(f"API Timeout: {e}", "Die Clash Royale API antwortet nicht rechtzeitig.")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise APIError(f"Clan nicht gefunden: {self.clan_tag}", "Der angegebene Clan wurde nicht gefunden.")
+            elif e.response.status_code == 403:
+                raise APIError("API Token ungültig", "Clash Royale API Token ist ungültig oder abgelaufen.")
+            elif e.response.status_code == 429:
+                raise APIError("API Rate Limit erreicht", "Zu viele API-Anfragen. Bitte versuchen Sie es später erneut.")
+            else:
+                raise APIError(f"API Fehler: {e.response.status_code}", "Fehler beim Abrufen der Daten von Clash Royale.")
+        except Exception as e:
+            raise APIError(f"Unerwarteter Fehler: {e}", "Ein unerwarteter Fehler ist beim API-Aufruf aufgetreten.")
 
     # --- API calls (eigener Clan) ---
     async def get_clan(self) -> Dict[str, Any]:
+        """Holt Clan-Informationen."""
         return await self._get(self._clan_path(""), cache_bust=False)
 
+    async def get_clan_info(self, clan_tag: str) -> Dict[str, Any]:
+        """Holt Clan-Informationen für einen spezifischen Clan."""
+        # Entferne # falls vorhanden und füge es wieder hinzu
+        clean_tag = clan_tag.lstrip('#')
+        encoded_tag = f"%23{clean_tag}"
+        url = f"https://api.clashroyale.com/v1/clans/{encoded_tag}"
+        
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout)) as client:
+                response = await client.get(url, headers={"Authorization": f"Bearer {self.token}"})
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise APIError("Clan nicht gefunden", f"Clan {clan_tag} existiert nicht.")
+            else:
+                raise APIError(f"API Fehler: {e.response.status_code}", "Fehler beim Abrufen der Clan-Daten.")
+        except Exception as e:
+            raise APIError(f"Unerwarteter Fehler: {e}", "Ein unerwarteter Fehler ist beim API-Aufruf aufgetreten.")
+
     async def get_current_river(self, force: bool = True) -> Dict[str, Any]:
-        return await self._get(self._clan_path("/currentriverrace"), cache_bust=True or force)
+        """Holt aktuelle River Race Daten."""
+        return await self._get(self._clan_path("/currentriverrace"), cache_bust=force)
 
     async def get_members(self) -> Dict[str, Any]:
+        """Holt Clan-Mitglieder."""
         return await self._get(self._clan_path("/members"), cache_bust=False)
+
+    async def get_river_log(self, limit: int = None) -> Dict[str, Any]:
+        """Holt River Race Log."""
+        if limit is None:
+            limit = config.DEFAULT_WAR_HISTORY_LIMIT
+        return await self._get(self._clan_path(f"/riverracelog?limit={limit}"), cache_bust=True)
 
     # --- API calls (beliebiger Clan) ---
     async def get_members_of(self, clan_tag_nohash: str) -> Dict[str, Any]:
+        """Holt Mitglieder eines beliebigen Clans."""
         tag = clan_tag_nohash.upper().lstrip("#")
         return await self._get(f"{self.BASE}/clans/%23{tag}/members", cache_bust=False)
 
     async def get_river_log_of(self, clan_tag_nohash: str, limit: int = 80) -> Dict[str, Any]:
+        """Holt River Race Log eines beliebigen Clans."""
         tag = clan_tag_nohash.upper().lstrip("#")
         return await self._get(f"{self.BASE}/clans/%23{tag}/riverracelog?limit={limit}", cache_bust=True)
 
     # ---------- Fresh-Strategy für /currentriverrace ----------
-    async def get_current_river_fresh(self, attempts: int = 2, max_decks: int = 4) -> Dict[str, Any]:
+    async def get_current_river_fresh(self, attempts: int = None, max_decks: int = None) -> Dict[str, Any]:
+        """
+        Holt aktuelle River Race Daten mit mehreren Versuchen bei vermutlich veralteten Daten.
+        """
+        if attempts is None:
+            attempts = config.OPEN_ATTACKS_ATTEMPTS_DEFAULT
+        if max_decks is None:
+            max_decks = config.MAX_DECKS_PER_DAY
+            
         rr = await self.get_current_river(force=True)
+        
         if attempts <= 1:
             return rr
+            
         if self._looks_stale(rr, max_decks=max_decks):
             rr = await self.get_current_river(force=True)
             if attempts >= 3 and self._looks_stale(rr, max_decks=max_decks):
                 rr = await self.get_current_river(force=True)
+                
         return rr
 
-    # --------- Heuristik: ist die Liste vermutlich "alt"? ----------
-    def _looks_stale(self, rr: Dict[str, Any], max_decks: int = 4) -> bool:
+    def _looks_stale(self, rr: Dict[str, Any], max_decks: int = None) -> bool:
+        """
+        Heuristik: ist die River Race Liste vermutlich "alt"?
+        Prüft ob zu viele Spieler noch alle Decks haben (nach 17 Uhr).
+        """
+        if max_decks is None:
+            max_decks = config.MAX_DECKS_PER_DAY
+            
         clan = rr.get("clan") or {}
         participants = clan.get("participants") or []
+        
         if not participants:
             return False
+            
         rows = []
         for p in participants:
             used = int(p.get("decksUsedToday") or 0)
             remaining = max(max_decks - used, 0)
             rows.append(remaining)
+            
         total = len(rows)
         four_open = sum(1 for r in rows if r == max_decks)
         hour_local = datetime.now(LOCAL_TZ).hour
+        
         return total > 0 and four_open / total >= 0.70 and hour_local >= 17
 
-# ---------- Helpers & Formatters ----------
-def parse_sc_time(s: str):
-    if not s:
-        return None
-    # Supercell Zeitformat: 20200101T000000.000Z
-    for fmt in ("%Y%m%dT%H%M%S.%fZ", "%Y%m%dT%H%M%SZ"):
-        try:
-            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
-        except Exception:
-            pass
-    return None
-
-def ago_str(dt):
-    if not dt:
-        return "unbekannt"
-    delta = datetime.now(timezone.utc) - dt
-    secs = int(delta.total_seconds())
-    if secs < 90: return "vor 1 Min"
-    mins = secs // 60
-    if mins < 90: return f"vor {mins} Min"
-    hrs = secs // 3600
-    if hrs < 36: return f"vor {hrs} Std"
-    days = secs // 86400
-    if days < 14: return f"vor {days} T"
-    weeks = secs // 604800
-    if weeks < 10: return f"vor {weeks} W"
-    return dt.strftime("am %d.%m.%Y")
-
-def fmt_clan(c: Dict[str, Any], fallback_tag: str) -> str:
-    name = c.get("name", "Unbekannt")
-    tag = c.get("tag", f"#{fallback_tag}")
-    members = c.get("members", "?")
-    score = c.get("clanScore", "?")
-    req = c.get("requiredTrophies", "?")
-    desc = (c.get("description") or "").strip()
-    if len(desc) > 400:
-        desc = desc[:400] + "…"
-    return (f"<b>{name}</b> ({tag})\n"
-            f"👥 Mitglieder: <b>{members}/50</b>\n"
-            f"🏆 Clan-Trophäen: <b>{score}</b>\n"
-            f"🔑 Mindest-Trophäen: <b>{req}</b>\n—\n{desc}")
-
-def fmt_open_decks_overview(rr: Dict[str, Any], my_tag_nohash: str, max_decks: int = 4) -> str:
-    """
-    Übersicht: eigener Clan mit allen Mitgliedern (offene Decks), Gegner kompakt (noch X/Y offen).
-    """
-    my_tag = my_tag_nohash.upper().lstrip("#")
-
-    # --- eigenen Clan robust finden ---
-    my = rr.get("clan") or {}
-    if (my.get("tag") or "").upper().lstrip("#") != my_tag:
-        for c in (rr.get("clans") or []):
-            if (c.get("tag") or "").upper().lstrip("#") == my_tag:
-                my = c
-                break
-
-    my_name = my.get("name", "Unser Clan")
-    participants = my.get("participants") or []
-
-    # --- Mitgliederliste bauen ---
-    rows: List[Tuple[int, int, str]] = []  # (remaining, used_today, name)
-    for p in participants:
-        name = p.get("name", "Unbekannt")
-        used_today = int(p.get("decksUsedToday") or 0)
-        remaining = max(max_decks - used_today, 0)
-        rows.append((remaining, used_today, name))
-
-    rows_open  = sorted([r for r in rows if r[0] > 0], key=lambda x: (-x[0], x[1], x[2].lower()))
-    rows_done  = sorted([r for r in rows if r[0] == 0], key=lambda x: x[2].lower())
-    ordered    = rows_open + rows_done
-
-    lines: List[str] = []
-    lines.append(f"📋 {my_name} – Offene Angriffe (heute)\n")
-
-    for i, (rem, used, name) in enumerate(ordered, start=1):
-        done = " ✅" if rem == 0 and used >= max_decks else ""
-        lines.append(f"{i:>2}. {name} — {rem} offen ({used}/{max_decks}){done}")
-
-    total_remaining = sum(rem for rem, _, _ in rows)
-
-    # --- Gegner kompakt ---
-    opp_lines: List[str] = []
-    for c in (rr.get("clans") or []):
-        tag = (c.get("tag") or "").upper().lstrip("#")
-        if not tag or tag == my_tag:
-            continue
-        plist = c.get("participants") or []
-        total_slots = len(plist) * max_decks
-        open_sum = 0
-        for p in plist:
-            used_t = int(p.get("decksUsedToday") or 0)
-            open_sum += max(max_decks - used_t, 0)
-        opp_lines.append(f"• {c.get('name','?')} — noch {open_sum}/{total_slots} offen")
-
-    if opp_lines:
-        lines.append("\n🆚 Gegner (heute, kompakt)")
-        lines.extend(opp_lines)
-
-    # Zeitstempel
-    try:
-        ts = datetime.now(LOCAL_TZ).strftime("%H:%M:%S %Z")
-    except Exception:
-        ts = datetime.utcnow().strftime("%H:%M:%S UTC")
-
-    lines.append(f"\nΣ offen heute: {total_remaining}")
-    lines.append(f"🕒 Datenstand: {ts}")
-
-    return "\n".join(lines)[:4096]
-
-# ---- River-Race Scoreboard (Mein Clan vs. Gegner) ----
-def fmt_river_scoreboard(rr: dict, my_tag_nohash: str, mode: str = "auto") -> str:
-    my_tag = my_tag_nohash.upper().lstrip("#")
-    clans_list = []
-    seen = set()
-
-    def add_entry(c: dict):
-        if not c:
-            return
-        tag = (c.get("tag") or "").upper().lstrip("#")
-        if not tag or tag in seen:
-            return
-        seen.add(tag)
-        name   = c.get("name") or "Unbekannt"
-        fame   = int(c.get("fame") or c.get("points") or 0)
-        period = int(c.get("periodPoints") or 0)
-        repair = int(c.get("repairPoints") or 0)
-        clans_list.append({"tag": tag, "name": name, "fame": fame, "period": period, "repair": repair})
-
-    add_entry(rr.get("clan"))
-    for c in (rr.get("clans") or []):
-        add_entry(c)
-
-    if not clans_list:
-        return "Keine River-Race-Daten verfügbar."
-
-    my = next((c for c in clans_list if c["tag"] == my_tag), None) or clans_list[0]
-    use_period = (mode.lower() == "heute") or (mode.lower() == "auto" and any(c["period"] > 0 for c in clans_list))
-    metric = "period" if use_period else "fame"
-
-    clans_list.sort(key=lambda x: (-x[metric], x["name"].lower()))
-    my_val = my[metric]
-
-    header = "🏁 <b>River-Race Punkte (heute)</b>\n" if use_period else "🏁 <b>River-Race Punkte (gesamt)</b>\n"
-    lines = [header]
-    for i, c in enumerate(clans_list, start=1):
-        val = c[metric]
-        delta = val - my_val
-        sign = "±" if delta == 0 else ("+" if delta > 0 else "−")
-        me_mark = " ⭐" if c["tag"] == my["tag"] else ""
-        lines.append(
-            f"{i:>2}. {c['name']} (#{c['tag']}) — "
-            f"Punkte: <b>{val}</b> | Heute: {c['period']} | Gesamt: {c['fame']} | Δ zu uns: {sign}{abs(delta)}{me_mark}"
-        )
-
-    return "\n".join(lines)[:4096]
-
-def fmt_donations_leaderboard(members_payload: dict, limit: int = 10, include_received: bool = False) -> str:
-    items = members_payload.get("items") or []
-    rows = []
-    total_donated = 0
-    total_received = 0
-
-    for m in items:
-        name = m.get("name", "Unbekannt")
-        donated = int(m.get("donations") or 0)
-        received = int(m.get("donationsReceived") or 0)
-        total_donated += donated
-        total_received += received
-        rows.append((donated, received, name))
-
-    rows.sort(key=lambda x: (-x[0], x[2].lower()))
-    if isinstance(limit, int) and limit > 0:
-        rows = rows[:limit]
-
-    lines = ["🎁 <b>Spenden-Rangliste</b> (diese Woche)\n"]
-    for i, (donated, received, name) in enumerate(rows, start=1):
-        extra = f" | erhalten: {received}" if include_received else ""
-        lines.append(f"{i:>2}. {name} — gespendet: <b>{donated}</b>{extra}")
-
-    lines.append(f"\nΣ gespendet: {total_donated}" + (f" | Σ erhalten: {total_received}" if include_received else ""))
-    return "\n".join(lines)[:4096]
-
-def fmt_activity_list(members_payload: Dict[str, Any]) -> str:
-    """
-    Listet alle Clan-Mitglieder sortiert: oben am längsten offline, unten: zuletzt online.
-    Nutzt 'lastSeen' aus /v1/clans/%23TAG/members.
-    """
-    items = members_payload.get("items") or []
-    rows = []
-    for m in items:
-        name = m.get("name", "Unbekannt")
-        role = m.get("role", "")
-        dt = parse_sc_time(m.get("lastSeen"))
-        rows.append((dt or datetime.min.replace(tzinfo=timezone.utc), name, role))
-    rows.sort(key=lambda x: x[0])
-
-    lines = ["📊 Aktivität (oben: am längsten offline, unten: zuletzt online)\n"]
-    for i, (dt, name, role) in enumerate(rows, start=1):
-        lines.append(f"{i:>2}. {name} ({role}) — {ago_str(dt)}")
-    return "\n".join(lines)[:4096]
-
-# ---------- Kriegshistorie: Aggregation & Format ----------
-def _aggregate_war_history(rlog: Dict[str, Any], my_tag_nohash: str):
+# ---------- War History Aggregation ----------
+def _aggregate_war_history(rlog: Dict[str, Any], my_tag_nohash: str) -> Dict[str, Dict[str, Any]]:
     """
     Aggregiert alle Teilnehmer unseres Clans über das RiverRace-Log.
-    Rückgabe: dict[tag] = {name, fame, repair, decks, boats, wars, first_seen (dt), last_seen (dt)}
+    Rückgabe: dict[tag] = {name, fame, repair, decks, boats, wars, first_seen, last_seen}
     """
+    from formatters import parse_sc_time  # Import hier um zirkuläre Imports zu vermeiden
+    
     my_tag = my_tag_nohash.upper().lstrip("#")
     items = rlog.get("items") or []
     acc: Dict[str, Dict[str, Any]] = {}
 
     for it in items:
-        # Zeitstempel der Woche/Section (best effort)
-        at = parse_sc_time(it.get("createdDate") or it.get("endTime") or it.get("finishedTime") or it.get("updatedTime"))
+        # Zeitstempel der Woche/Section
+        at = parse_sc_time(it.get("createdDate") or it.get("endTime") or 
+                          it.get("finishedTime") or it.get("updatedTime"))
 
         standings = it.get("standings") or []
         for st in standings:
@@ -314,11 +203,13 @@ def _aggregate_war_history(rlog: Dict[str, Any], my_tag_nohash: str):
             tag = (clan_obj.get("tag") or "").upper().lstrip("#")
             if tag != my_tag:
                 continue
+                
             for p in (clan_obj.get("participants") or []):
                 ptag = (p.get("tag") or "").upper().lstrip("#")
                 if not ptag:
                     # Falls Tag fehlt, über Name fallen lassen (kann doppeln)
                     ptag = f"NON-{p.get('name','?')}"
+                    
                 entry = acc.setdefault(ptag, {
                     "name": p.get("name", "Unbekannt"),
                     "fame": 0, "repair": 0,
@@ -326,283 +217,397 @@ def _aggregate_war_history(rlog: Dict[str, Any], my_tag_nohash: str):
                     "wars": 0,
                     "first_seen": at, "last_seen": at,
                 })
+                
                 entry["name"] = p.get("name", entry["name"])
                 entry["fame"] += int(p.get("fame") or 0)
                 entry["repair"] += int(p.get("repairPoints") or 0)
                 entry["decks"] += int(p.get("decksUsed") or 0)
                 entry["boats"] += int(p.get("boatAttacks") or 0)
-                entry["wars"]  += 1
+                entry["wars"] += 1
+                
                 if at:
                     if not entry["first_seen"] or (entry["first_seen"] and at < entry["first_seen"]):
                         entry["first_seen"] = at
                     if not entry["last_seen"] or (entry["last_seen"] and at > entry["last_seen"]):
                         entry["last_seen"] = at
+                        
     return acc
-
-def _fmt_date(dt: datetime) -> str:
-    if not dt:
-        return "unbekannt"
-    try:
-        return dt.astimezone(LOCAL_TZ).strftime("%d.%m.%Y")
-    except Exception:
-        return dt.strftime("%d.%m.%Y")
-
-def fmt_war_history_summary(rlog: Dict[str, Any], my_tag_nohash: str) -> str:
-    acc = _aggregate_war_history(rlog, my_tag_nohash)
-    if not acc:
-        return "Keine Kriegshistorie verfügbar."
-
-    rows = []
-    for tag, e in acc.items():
-        total_pts = e["fame"] + e["repair"]
-        rows.append((
-            -total_pts, - (e["decks"] + e["boats"]), e["name"].lower(),  # Sortierschlüssel
-            e, tag
-        ))
-    rows.sort()
-
-    lines = ["📚 <b>Kriegshistorie – Übersicht</b>\n"]
-    for i, (_, __, ___, e, tag) in enumerate(rows, start=1):
-        total_pts = e["fame"] + e["repair"]
-        since = _fmt_date(e["first_seen"])
-        lines.append(
-            f"{i:>2}. {e['name']} (#{tag}) — "
-            f"Angriffe: {e['decks']}+{e['boats']} "
-            f"| Punkte: <b>{total_pts}</b> (F:{e['fame']} / R:{e['repair']}) "
-            f"| Kriege: {e['wars']} | seit {since}"
-        )
-    return "\n".join(lines)[:4096]
-
-def fmt_war_history_player(rlog: Dict[str, Any], my_tag_nohash: str, query: str) -> str:
-    acc = _aggregate_war_history(rlog, my_tag_nohash)
-    if not acc:
-        return "Keine Kriegshistorie verfügbar."
-
-    q = query.strip().lower()
-    # Erst exakte Namens-Treffer, dann enthält, dann Tag-Match
-    exact = [(t,e) for t,e in acc.items() if e["name"].lower() == q]
-    part  = [(t,e) for t,e in acc.items() if q in e["name"].lower()]
-    tagm  = [(t,e) for t,e in acc.items() if q.replace("#","") == t.lower()]
-
-    cand = exact or part or tagm
-    if not cand:
-        # kleine Vorschlagsliste
-        suggestions = ", ".join(sorted({e["name"] for _,e in list(acc.items())[:10]}))
-        return f"Kein Treffer für „{query}“. Vorschläge: {suggestions}"
-
-    tag, e = cand[0]
-    total_pts = e["fame"] + e["repair"]
-    since = _fmt_date(e["first_seen"])
-    last  = _fmt_date(e["last_seen"]) if e["last_seen"] else "unbekannt"
-
-    lines = [
-        f"📖 <b>Kriegshistorie – {e['name']}</b>",
-        f"Tag: #{tag}",
-        f"Seit: {since}  |  Letzte Teilnahme: {last}",
-        f"Teilgenommene Kriege: {e['wars']}",
-        f"Punkte gesamt: <b>{total_pts}</b> (Fame: {e['fame']}, Repair: {e['repair']})",
-        f"Angriffe gesamt: Decks {e['decks']}  |  Boot {e['boats']}",
-    ]
-    return "\n".join(lines)[:4096]
-
-def fmt_war_history_player_multi(rlog: Dict[str, Any], my_tag_nohash: str, query: str) -> List[str]:
-    acc = _aggregate_war_history(rlog, my_tag_nohash)
-    if not acc:
-        return ["Keine Kriegshistorie verfügbar."]
-
-    q = query.strip().lower()
-    # Erst exakte Namens-Treffer, dann enthält, dann Tag-Match
-    exact = [(t,e) for t,e in acc.items() if e["name"].lower() == q]
-    part  = [(t,e) for t,e in acc.items() if q in e["name"].lower()]
-    tagm  = [(t,e) for t,e in acc.items() if q.replace("#","") == t.lower()]
-
-    cand = exact or part or tagm
-    if not cand:
-        suggestions = ", ".join(sorted({e["name"] for _,e in list(acc.items())[:10]}))
-        return [f"Kein Treffer für „{query}“. Vorschläge: {suggestions}"]
-
-    results = []
-    for tag, e in cand:
-        total_pts = e["fame"] + e["repair"]
-        since = _fmt_date(e["first_seen"])
-        last  = _fmt_date(e["last_seen"]) if e["last_seen"] else "unbekannt"
-        lines = [
-            f"📖 <b>Kriegshistorie – {e['name']}</b>",
-            f"Tag: #{tag}",
-            f"Seit: {since}  |  Letzte Teilnahme: {last}",
-            f"Teilgenommene Kriege: {e['wars']}",
-            f"Punkte gesamt: <b>{total_pts}</b> (Fame: {e['fame']}, Repair: {e['repair']})",
-            f"Angriffe gesamt: Decks {e['decks']}  |  Boot {e['boats']}",
-        ]
-        results.append("\n".join(lines)[:4096])
-    return results
 
 # =====================  SPIONAGE: aktivsten Gegner ermitteln  =====================
 
-def _bar(pct: float, width: int = 18) -> str:
-    pct = max(0.0, min(1.0, float(pct)))
-    filled = int(round(width * pct))
-    return "█" * filled + "░" * (width - filled)
 
-async def _collect_daily_rows_for_clan(client: ClashClient, clan_tag: str, max_days: int = 20) -> list[dict]:
-    """
-    Extrahiert die letzten 'max_days' echten KRIEGSTAGE aus dem RiverRace-Log eines Clans.
-    Für jeden Tag: {season, section, fame_day, used_decks, participants, created, participants_tags, participants_names}
-    'Training' (0 Punkte und 0 Decks) wird übersprungen.
-    """
-    log = await client.get_river_log_of(clan_tag, limit=80)
-    items = log.get("items") or []
-    rows: list[dict] = []
-
-    tag_norm = clan_tag.upper().lstrip("#")
-
-    for it in items:
-        created = parse_sc_time(it.get("createdDate") or it.get("endTime") or it.get("finishedTime") or it.get("updatedTime"))
-        season  = it.get("seasonId")
-        section = it.get("sectionIndex")
-        standings = it.get("standings") or []
-
-        # passenden Clan-Eintrag suchen
-        target = None
-        for st in standings:
-            c = st.get("clan") or {}
-            if (c.get("tag") or "").upper().lstrip("#") == tag_norm:
-                target = c
-                break
-        if not target:
-            continue
-
-        parts = target.get("participants") or []
-        fame_day = sum(int(p.get("fame") or 0) for p in parts)
-        used_decks = sum(int(p.get("decksUsed") or 0) for p in parts)
-        n = len(parts)
-
-        # "Trainingstage" raus
-        if fame_day <= 0 and used_decks <= 0:
-            continue
-
-        rows.append({
-            "season": season,
-            "section": section,
-            "created": created,
-            "fame_day": fame_day,
-            "used_decks": used_decks,
-            "participants": n,
-            "participants_tags": [ (p.get("tag") or "").upper().lstrip("#") for p in parts if p.get("tag") ],
-            "participants_names": [ p.get("name","?") for p in parts ],
-        })
-        if len(rows) >= max_days:
-            break
-
-    return rows
-
-def _avg_attack_usage(rows: list[dict]) -> float:
-    """Ø Auslastung (benutzte Decks / (4 * Teilnehmer)) über alle Tage."""
-    vals = []
-    for r in rows:
-        n = int(r.get("participants") or 0)
-        used = int(r.get("used_decks") or 0)
-        if n > 0:
-            vals.append( used / float(4 * n) )
-    return sum(vals)/len(vals) if vals else 0.0
 
 async def _pick_best_opponent(client: ClashClient, rr: dict, my_tag_nohash: str) -> Optional[dict]:
-    """Wählt den 'aktivsten' Gegnerclan anhand der Summe der letzten Tagespunkte."""
+    """Wählt den aktivsten Gegnerclan basierend auf aktuellen River Race Daten."""
     my_tag = my_tag_nohash.upper().lstrip("#")
 
-    # Gegner aus aktuellem RiverRace einsammeln
-    enemy_list: list[dict] = []
-    for c in (rr.get("clans") or []):
+    # Gegner aus aktuellem RiverRace einsammeln (inkl. periodPoints für bessere Bewertung)
+    enemy_list: List[Dict] = []
+    
+    # Alle Clans aus der aktuellen River Race durchgehen
+    all_clans = (rr.get("clans") or [])
+    
+    # Unser Clan hinzufügen wenn er nicht in clans steht
+    our_clan = rr.get("clan")
+    if our_clan and (our_clan.get("tag") or "").upper().lstrip("#") == my_tag:
+        # Unser Clan ist bereits der Haupteintrag, Gegner sind in clans Array
+        pass  
+    else:
+        # Unser Clan könnte in clans Array stehen
+        if our_clan:
+            all_clans.append(our_clan)
+
+    for c in all_clans:
         tag = (c.get("tag") or "").upper().lstrip("#")
         if not tag or tag == my_tag:
             continue
-        enemy_list.append({"tag": tag, "name": c.get("name","Unbekannt")})
+            
+        # Aktivitätsbewertung basierend auf aktuellen Daten
+        fame = int(c.get("fame") or 0)
+        period_points = int(c.get("periodPoints") or 0)  # Tagespunkte
+        participants = c.get("participants") or []
+        
+        # Berechne Aktivitätsmetriken
+        active_players = sum(1 for p in participants if int(p.get("fame") or 0) > 0)
+        total_decks_used = sum(int(p.get("decksUsed") or 0) for p in participants)
+        total_decks_today = sum(int(p.get("decksUsedToday") or 0) for p in participants)
+        
+        # Score: kombiniert Gesamtpunkte, heutige Aktivität und Spielerbeteiligung
+        activity_score = (
+            fame * 0.4 +           # Gesamtleistung
+            period_points * 0.4 +   # Heutige Leistung (wichtig!)
+            active_players * 50 +   # Anzahl aktiver Spieler
+            total_decks_used * 10   # Gesamte Deck-Nutzung
+        )
+        
+        enemy_list.append({
+            "tag": tag,
+            "name": c.get("name", "Unbekannt"),
+            "fame": fame,
+            "period_points": period_points,
+            "participants": len(participants),
+            "active_players": active_players,
+            "total_decks_used": total_decks_used,
+            "total_decks_today": total_decks_today,
+            "activity_score": activity_score,
+            "clan_data": c  # Originaldaten für Details
+        })
 
     if not enemy_list:
         return None
 
-    # Für jeden Gegner Tage sammeln & bewerten
-    best = None
-    best_score = -1
-    best_rows: list[dict] = []
-    for e in enemy_list:
-        rows = await _collect_daily_rows_for_clan(client, e["tag"], max_days=20)
-        score = sum(r["fame_day"] for r in rows)  # einfache Aktivitätsmetrik
-        if score > best_score:
-            best, best_score, best_rows = e, score, rows
-
-    if best is None:
-        return None
-
-    best["rows"] = best_rows
-    best["avg_usage"] = _avg_attack_usage(best_rows)
+    # Besten Gegner nach Activity-Score auswählen
+    best = max(enemy_list, key=lambda x: x["activity_score"])
+    
+    if best["activity_score"] == 0:
+        # Alle Gegner inaktiv, nehme den mit den meisten Mitgliedern
+        best = max(enemy_list, key=lambda x: x["participants"])
+    
     return best
 
-def _format_points_rows(rows: list[dict]) -> str:
-    lines = []
-    for i, r in enumerate(rows, start=1):
-        d = r.get("created")
-        when = d.strftime("%d.%m.") if d else f"S{r.get('season')}/P{r.get('section')}"
-        n = int(r.get("participants") or 0)
-        used = int(r.get("used_decks") or 0)
-        fame = int(r.get("fame_day") or 0)
-        pct = (used / float(4*n)) if n > 0 else 0.0
-        lines.append(f"{i:>2}. {when} — Punkte: <b>{fame}</b> | Decks: {used}/{4*n} ({int(round(pct*100))}%)")
-    return "\n".join(lines) if lines else "—"
-
-async def spy_make_messages(client: ClashClient, my_tag_nohash: str, days: int = 20) -> tuple[str, str]:
+async def spy_make_messages(client: ClashClient, my_tag_nohash: str, days: int = None) -> List[str]:
     """
-    Baut die zwei Nachrichten für /spion.
+    Baut die Nachrichten für /spion mit historischer Analyse.
     Nachricht 1: Kurz-Summary.
-    Nachricht 2: Details für den aktivsten Gegnerclan.
+    Nachricht 2: Historische Leistungsanalyse.
+    Nachricht 3: Aktuelle Details.
     """
+    if days is None:
+        days = config.DEFAULT_SPY_DAYS
+        
     rr = await client.get_current_river_fresh(attempts=2)
-
     best = await _pick_best_opponent(client, rr, my_tag_nohash)
+    
     if not best:
-        return ("Es wurden keine Gegner im aktuellen River Race gefunden.",
-                "Keine Details verfügbar.")
+        return ["Es wurden keine Gegner im aktuellen River Race gefunden."]
 
-    # Kurzmeldung
-    name = best["name"]; tag = best["tag"]
-    rows = best["rows"]
-    avg_usage = best["avg_usage"]
-    bar = _bar(avg_usage, width=18)
-    head = (
-        f"👑 <b>Gegner-Spionage</b>\n"
-        f"Clan: <b>{name}</b> (#{tag})\n"
-        f"Ø Angriffs-Auslastung/Tag: <b>{int(round(avg_usage*100))}%</b>  <code>{bar}</code>"
-    )
-    if rows:
-        total = sum(r["fame_day"] for r in rows)
-        head += f"\nΣ Tagespunkte (letzte {len(rows)} Kriegstage): <b>{total}</b>"
-    else:
-        head += "\n📉 Keine expliziten Tagespunkte im Log gefunden."
+    # Hole zusätzliche Clan-Info für tatsächliche Mitgliederzahl
+    try:
+        clan_info = await client.get_clan_info(best["tag"])
+        best["total_members"] = len(clan_info.get("memberList", []))
+    except Exception as e:
+        logger.warning(f"Konnte Clan-Info für {best['tag']} nicht laden: {e}")
+        best["total_members"] = best["participants"]  # Fallback
 
-    # Detailmeldung
-    last_participants_tags = set(rows[0]["participants_tags"]) if rows else set()
-    members_now = await client.get_members_of(tag)
-    now_tags = set((m.get("tag") or "").upper().lstrip("#") for m in (members_now.get("items") or []))
-    still = last_participants_tags & now_tags
-    gone  = last_participants_tags - now_tags
-    new   = now_tags - last_participants_tags
+    messages = []
+    
+    # Nachricht 1: Kurz-Summary
+    summary = _format_spy_summary(best)
+    messages.append(summary)
+    
+    # Nachricht 2: Historische Analyse
+    try:
+        river_log = await client.get_river_log_of(my_tag_nohash)
+        historical_analysis = _analyze_opponent_history(best["tag"], river_log)
+        logger.info(f"Spion Debug: Gegnerclan {best['tag']}, Historische Daten: {len(historical_analysis) if historical_analysis else 0}")
+        if historical_analysis:
+            history_msg = _format_historical_analysis(best, historical_analysis)
+            messages.append(history_msg)
+            logger.info(f"Spion Debug: Historische Nachricht erstellt ({len(history_msg)} Zeichen)")
+        else:
+            debug_msg = f"⚠️ Keine historischen Daten für Gegnerclan {best['name']} ({best['tag']}) gefunden."
+            messages.append(debug_msg)
+            logger.info(f"Spion Debug: {debug_msg}")
+    except Exception as e:
+        error_msg = f"⚠️ Historische Daten konnten nicht geladen werden: {str(e)}"
+        logger.error(f"Fehler beim Laden der historischen Daten: {e}")
+        messages.append(error_msg)
+    
+    # Nachricht 3: Aktuelle Details
+    details = _format_spy_details(best, rr)
+    messages.append(details)
 
-    name_by_tag = { (m.get("tag") or "").upper().lstrip("#"): m.get("name","?") for m in (members_now.get("items") or []) }
-    gone_names = [name_by_tag.get(t, t) for t in sorted(gone)]
-    new_names  = [name_by_tag.get(t, t) for t in sorted(new)]
+    logger.info(f"Spion Debug: Insgesamt {len(messages)} Nachrichten erstellt")
+    return messages
 
-    detail = [
-        f"🛡️ <b>Den besten / aktivsten Gegnerclan</b>\n<b>{name}</b> (#{tag})",
-        f"Ø Angriffs-Auslastung/Tag: <b>{int(round(avg_usage*100))}%</b>  <code>{bar}</code>",
-        "",
-        f"📅 <b>Letzte {len(rows)} Kriegstage (ohne Training)</b>",
-        _format_points_rows(rows),
-        "",
-        f"👥 Teilnehmer im letzten Krieg: <b>{len(last_participants_tags)}</b>  | davon aktuell noch da: <b>{len(still)}</b>",
+def _format_spy_summary(opponent: dict) -> str:
+    """Formatiert die Kurz-Zusammenfassung für den besten Gegner."""
+    from formatters import _bar
+    
+    name = opponent["name"]
+    tag = opponent["tag"] 
+    fame = opponent["fame"]
+    period_points = opponent["period_points"]
+    participants = opponent["participants"]
+    active_players = opponent["active_players"]
+    total_members = opponent.get("total_members", participants)
+    
+    # Aktivitätsrate berechnen
+    activity_rate = active_players / participants if participants > 0 else 0.0
+    bar = _bar(activity_rate)
+    
+    lines = [
+        f"<b>Gegner-Spionage: Aktivster Clan</b>",
+        f"",
+        f"<b>{name}</b> (#{tag})",
+        f"Clan-Mitglieder: <b>{total_members}/50</b>",
+        f"River Race: <b>{participants}</b> Teilnehmer | <b>{active_players}</b> aktiv ({int(activity_rate*100)}%)",
+        f"Aktivitaetsrate: <code>{bar}</code>",
+        f"",
+        f"<b>Aktuelle Leistung:</b>",
+        f"Gesamtpunkte: <b>{fame:,}</b>",
+        f"Heute: <b>{period_points:,}</b> Punkte"
     ]
-    if gone_names:
-        detail.append(f"⬅️ <b>Weg</b>: " + ", ".join(gone_names[:30]))
-    if new_names:
-        detail.append(f"➡️ <b>Neu</b>: " + ", ".join(new_names[:30]))
+    
+    return "\n".join(lines)[:config.MAX_MESSAGE_LENGTH]
 
-    return (head[:4096], "\n".join(detail)[:4096])
+def _format_spy_details(opponent: dict, rr: dict) -> str:
+    """Formatiert die detaillierte Analyse des Gegner-Clans."""
+    clan_data = opponent["clan_data"]
+    participants = clan_data.get("participants", [])
+    
+    # Top Spieler nach Fame sortieren
+    top_players = sorted(
+        [p for p in participants if int(p.get("fame", 0)) > 0],
+        key=lambda x: int(x.get("fame", 0)),
+        reverse=True
+    )[:10]  # Top 10
+    
+    # Deck-Nutzung Statistiken
+    deck_usage_stats = []
+    for p in participants:
+        used = int(p.get("decksUsed", 0))
+        used_today = int(p.get("decksUsedToday", 0))
+        if used > 0 or used_today > 0:
+            deck_usage_stats.append((p.get("name", "?"), used, used_today))
+    
+    deck_usage_stats.sort(key=lambda x: x[1], reverse=True)
+    
+    lines = [
+        f"<b>Detailanalyse: {opponent['name']}</b>",
+        f"",
+        f"<b>Top Spieler (nach Gesamtpunkten):</b>"
+    ]
+    
+    for i, player in enumerate(top_players[:5], 1):
+        name = player.get("name", "?")
+        fame = int(player.get("fame", 0))
+        decks_used = int(player.get("decksUsed", 0))
+        boat_attacks = int(player.get("boatAttacks", 0))
+        lines.append(f"{i}. {name} - {fame:,} Punkte ({decks_used}D, {boat_attacks}B)")
+    
+    if not top_players:
+        lines.append("- Keine aktiven Spieler gefunden")
+    
+    lines.extend([
+        f"",
+        f"<b>Aktivste Spieler (nach Deck-Nutzung):</b>"
+    ])
+    
+    for i, (name, used, used_today) in enumerate(deck_usage_stats[:5], 1):
+        today_marker = f" (+{used_today} heute)" if used_today > 0 else ""
+        lines.append(f"{i}. {name} - {used} Decks{today_marker}")
+    
+    if not deck_usage_stats:
+        lines.append("- Keine Deck-Nutzung gefunden")
+    
+    # Zusätzliche Statistiken
+    total_fame = sum(int(p.get("fame", 0)) for p in participants)
+    total_decks = sum(int(p.get("decksUsed", 0)) for p in participants)
+    total_boats = sum(int(p.get("boatAttacks", 0)) for p in participants)
+    avg_fame_per_player = total_fame / len(participants) if participants else 0
+    
+    lines.extend([
+        f"",
+        f"<b>Clan-Statistiken:</b>",
+        f"- O Punkte/Spieler: {avg_fame_per_player:.0f}",
+        f"- Gesamt Decks: {total_decks}",
+        f"- Gesamt Bootangriffe: {total_boats}",
+        f"- Teilnahmequote: {opponent['active_players']}/{opponent['participants']} ({int(opponent['active_players']/opponent['participants']*100)}%)"
+    ])
+    
+    return "\n".join(lines)[:config.MAX_MESSAGE_LENGTH]
+
+def _analyze_opponent_history(opponent_tag: str, river_log: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """
+    Analysiert die historische Leistung eines Gegnerclans über mehrere River Races.
+    
+    Args:
+        opponent_tag: Tag des Gegnerclans (mit oder ohne #)
+        river_log: River Race Log Daten
+        
+    Returns:
+        Liste von historischen Leistungsdaten oder None
+    """
+    if not river_log or 'items' not in river_log:
+        return None
+    
+    # Stelle sicher, dass der Tag das # hat
+    if not opponent_tag.startswith('#'):
+        opponent_tag = '#' + opponent_tag
+    
+    logger.info(f"_analyze_opponent_history: Suche nach Tag '{opponent_tag}'")
+    
+    historical_data = []
+    
+    for race in river_log['items']:
+        if 'standings' not in race:
+            continue
+            
+        # Suche den Gegnerclan in den standings
+        for standing in race['standings']:
+            clan_info = standing.get('clan', {})
+            if clan_info.get('tag') == opponent_tag:
+                # Berechne Statistiken für diese Woche
+                participants = clan_info.get('participants', [])
+                total_participants = len(participants)
+                active_participants = sum(1 for p in participants if int(p.get('decksUsed', 0)) > 0)
+                total_decks_used = sum(int(p.get('decksUsed', 0)) for p in participants)
+                total_fame = clan_info.get('fame', 0)
+                
+                participation_rate = active_participants / total_participants if total_participants > 0 else 0
+                decks_per_active = total_decks_used / active_participants if active_participants > 0 else 0
+                
+                race_data = {
+                    'season_id': race.get('seasonId'),
+                    'section_index': race.get('sectionIndex'),
+                    'created_date': race.get('createdDate'),
+                    'rank': standing.get('rank'),
+                    'trophy_change': standing.get('trophyChange'),
+                    'fame': total_fame,
+                    'finish_time': clan_info.get('finishTime'),
+                    'total_participants': total_participants,
+                    'active_participants': active_participants,
+                    'participation_rate': participation_rate,
+                    'total_decks_used': total_decks_used,
+                    'decks_per_active': decks_per_active
+                }
+                
+                historical_data.append(race_data)
+                break
+    
+    # Sortiere nach Datum (neueste zuerst)
+    historical_data.sort(key=lambda x: x.get('created_date', ''), reverse=True)
+    
+    return historical_data[:20]  # Maximal 20 letzte Wochen
+
+def _format_historical_analysis(opponent: dict, historical_data: List[Dict[str, Any]]) -> str:
+    """
+    Formatiert die historische Analyse für einen Gegnerclan.
+    
+    Args:
+        opponent: Aktuelle Gegnerclan-Daten
+        historical_data: Liste der historischen Daten
+        
+    Returns:
+        Formatierte HTML-Nachricht
+    """
+    from formatters import _bar
+    
+    name = opponent["name"]
+    tag = opponent["tag"]
+    
+    lines = [
+        f"<b>🕵️ Historische Analyse: {name}</b>",
+        f"<code>#{tag}</code>",
+        f"",
+        f"<b>📊 Leistung der letzten {len(historical_data)} Wochen:</b>",
+        f""
+    ]
+    
+    if not historical_data:
+        lines.append("⚠️ Keine historischen Daten verfügbar.")
+        return '\n'.join(lines)
+    
+    # Header für Tabelle
+    lines.extend([
+        f"<code>Woche | Platz | Trophäen | Punkte  | Quote | Decks</code>",
+        f"<code>------|-------|----------|---------|-------|------</code>"
+    ])
+    
+    # Zeige maximal 15 Wochen in der Tabelle, aber verwende alle für Durchschnitte
+    display_data = historical_data[:15]
+    
+    # Daten für jede Woche
+    for i, race in enumerate(display_data, 1):
+        season = race.get('season_id', 'N/A')
+        section = race.get('section_index', 0)
+        rank = race.get('rank', '?')
+        trophy_change = race.get('trophy_change', 0)
+        fame = race.get('fame', 0)
+        participation = race.get('participation_rate', 0)
+        decks_per_active = race.get('decks_per_active', 0)
+        
+        # Formatiere Zahlen für bessere Lesbarkeit
+        trophy_str = f"+{trophy_change}" if trophy_change > 0 else str(trophy_change)
+        fame_str = f"{fame:,}".replace(',', '.')
+        if len(fame_str) > 6:
+            fame_str = f"{fame//1000}k"
+        
+        participation_str = f"{int(participation*100)}%"
+        decks_str = f"{decks_per_active:.1f}"
+        
+        week_label = f"S{season}.{section}" if season != 'N/A' else f"W-{i}"
+        
+        lines.append(
+            f"<code>{week_label:>5} | {rank:>5} | {trophy_str:>8} | "
+            f"{fame_str:>7} | {participation_str:>5} | {decks_str:>5}</code>"
+        )
+    
+    # Notiz wenn mehr Daten verfügbar sind
+    if len(historical_data) > len(display_data):
+        lines.extend([
+            f"",
+            f"<i>... und {len(historical_data) - len(display_data)} weitere Wochen</i>"
+        ])
+    
+    # Durchschnittliche Statistiken
+    if historical_data:
+        avg_rank = sum(race.get('rank', 0) for race in historical_data) / len(historical_data)
+        avg_fame = sum(race.get('fame', 0) for race in historical_data) / len(historical_data)
+        avg_participation = sum(race.get('participation_rate', 0) for race in historical_data) / len(historical_data)
+        avg_decks = sum(race.get('decks_per_active', 0) for race in historical_data) / len(historical_data)
+        
+        participation_bar = _bar(avg_participation)
+        
+        lines.extend([
+            f"",
+            f"<b>📈 Durchschnittswerte:</b>",
+            f"• Platzierung: <b>{avg_rank:.1f}</b>",
+            f"• Punkte/Woche: <b>{avg_fame:,.0f}</b>".replace(',', '.'),
+            f"• Teilnahmequote: <b>{int(avg_participation*100)}%</b>",
+            f"• Quote: <code>{participation_bar}</code>",
+            f"• Decks/Aktiver: <b>{avg_decks:.1f}</b>"
+        ])
+    
+    return '\n'.join(lines)[:config.MAX_MESSAGE_LENGTH]
