@@ -258,7 +258,7 @@ def fmt_donations_leaderboard(members_payload: dict, limit: int = None, include_
     lines.append(f"\nΣ gespendet: {total_donated}" + (f" | Σ erhalten: {total_received}" if include_received else ""))
     return "\n".join(lines)[:config.MAX_MESSAGE_LENGTH]
 
-def fmt_activity_list(members_payload: Dict[str, Any]) -> str:
+def fmt_activity_list(members_payload: Dict[str, Any], my_tag_nohash: str = None) -> str:
     """Formatiert Aktivitätsliste."""
     items = members_payload.get("items") or []
     rows = []
