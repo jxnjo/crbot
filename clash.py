@@ -337,7 +337,7 @@ async def spy_make_messages(client: ClashClient, my_tag_nohash: str, days: int =
     
     # Nachricht 2: Historische Analyse
     try:
-        river_log = await client.get_river_log_of(my_tag_nohash)
+        river_log = await client.get_river_log_of(best["tag"])
         historical_analysis = _analyze_opponent_history(best["tag"], river_log)
         logger.info(f"Spion Debug: Gegnerclan {best['tag']}, Historische Daten: {len(historical_analysis) if historical_analysis else 0}")
         if historical_analysis:
@@ -447,13 +447,18 @@ def _format_spy_details(opponent: dict, rr: dict) -> str:
     total_boats = sum(int(p.get("boatAttacks", 0)) for p in participants)
     avg_fame_per_player = total_fame / len(participants) if participants else 0
     
+    # Berechne Teilnahmequote sicher
+    participation_pct = 0
+    if opponent['participants'] > 0:
+        participation_pct = int(opponent['active_players'] / opponent['participants'] * 100)
+
     lines.extend([
         f"",
         f"<b>Clan-Statistiken:</b>",
         f"- O Punkte/Spieler: {avg_fame_per_player:.0f}",
         f"- Gesamt Decks: {total_decks}",
         f"- Gesamt Bootangriffe: {total_boats}",
-        f"- Teilnahmequote: {opponent['active_players']}/{opponent['participants']} ({int(opponent['active_players']/opponent['participants']*100)}%)"
+        f"- Teilnahmequote: {opponent['active_players']}/{opponent['participants']} ({participation_pct}%)"
     ])
     
     return "\n".join(lines)[:config.MAX_MESSAGE_LENGTH]
@@ -461,22 +466,21 @@ def _format_spy_details(opponent: dict, rr: dict) -> str:
 def _analyze_opponent_history(opponent_tag: str, river_log: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """
     Analysiert die historische Leistung eines Gegnerclans über mehrere River Races.
-    
+
     Args:
         opponent_tag: Tag des Gegnerclans (mit oder ohne #)
         river_log: River Race Log Daten
-        
+
     Returns:
         Liste von historischen Leistungsdaten oder None
     """
     if not river_log or 'items' not in river_log:
         return None
-    
-    # Stelle sicher, dass der Tag das # hat
-    if not opponent_tag.startswith('#'):
-        opponent_tag = '#' + opponent_tag
-    
-    logger.info(f"_analyze_opponent_history: Suche nach Tag '{opponent_tag}'")
+
+    # Normalisiere Tag für Vergleich (ohne #, uppercase)
+    opponent_tag_clean = opponent_tag.lstrip('#').upper()
+
+    logger.info(f"_analyze_opponent_history: Suche nach Tag '{opponent_tag_clean}'")
     
     historical_data = []
     
@@ -487,7 +491,8 @@ def _analyze_opponent_history(opponent_tag: str, river_log: Dict[str, Any]) -> O
         # Suche den Gegnerclan in den standings
         for standing in race['standings']:
             clan_info = standing.get('clan', {})
-            if clan_info.get('tag') == opponent_tag:
+            clan_tag_clean = (clan_info.get('tag') or '').lstrip('#').upper()
+            if clan_tag_clean == opponent_tag_clean:
                 # Berechne Statistiken für diese Woche
                 participants = clan_info.get('participants', [])
                 total_participants = len(participants)
