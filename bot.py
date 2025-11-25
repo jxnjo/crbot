@@ -17,7 +17,7 @@ from clash import ClashClient, _aggregate_war_history, spy_make_messages
 from formatters import (
     fmt_clan, fmt_activity_list, fmt_river_scoreboard, fmt_donations_leaderboard,
     fmt_open_decks_overview, fmt_war_history_summary, fmt_war_history_player_multi,
-    fmt_startup_message
+    fmt_startup_message, fmt_inactive_players
 )
 
 # Setup Logging
@@ -69,6 +69,7 @@ class CRBot:
         self.app.add_handler(CommandHandler("krieginfogesamt", ParameterizedHandler("krieginfogesamt", self._krieginfo_gesamt_handler).handle))
         self.app.add_handler(CommandHandler("spenden", ParameterizedHandler("spenden", self._spenden_handler).handle))
         self.app.add_handler(CommandHandler("krieghistorie", ParameterizedHandler("krieghistorie", self._krieghistorie_handler).handle))
+        self.app.add_handler(CommandHandler("inaktiv", ParameterizedHandler("inaktiv", self._inaktiv_handler).handle))
         self.app.add_handler(CommandHandler("spion", MultiMessageHandler("spion", self._spion_handler).handle))
 
     async def _krieginfo_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -128,6 +129,22 @@ class CRBot:
             return None  # Bereits gesendet
         else:
             return fmt_war_history_summary(log_data, config.CLAN_TAG, _aggregate_war_history)
+
+    async def _inaktiv_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+        """Handler für /inaktiv mit optionalem Sortierkriterium."""
+        # Hole beide Datenquellen: Mitglieder und aktuelle River Race
+        members = await self.clash.get_members()
+        river_race = await self.clash.get_current_river_fresh(attempts=2)
+        
+        # Bestimme Sortierkriterium
+        sort_by = "gesamt"  # Standard
+        if context.args:
+            arg = context.args[0].strip().lower()
+            valid_sorts = ["spenden", "kriegsangriffe", "kriegspunkte", "trophäenpfad", "gesamt"]
+            if arg in valid_sorts:
+                sort_by = arg
+        
+        return fmt_inactive_players(members, river_race, sort_by=sort_by, limit=10)
 
     async def _spion_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> list[str]:
         """Handler für /spion - Gegner-Spionage mit historischer Analyse."""

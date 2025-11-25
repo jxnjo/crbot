@@ -385,3 +385,173 @@ def _format_points_rows(rows: list[dict]) -> str:
     
     return "\n".join(lines) if lines else "—"
 
+
+def fmt_inactive_players(members_data: Dict[str, Any], river_data: Dict[str, Any], 
+                         sort_by: str = "gesamt", limit: int = 10) -> str:
+    """
+    Formatiert eine Liste der inaktivsten Spieler basierend auf verschiedenen Kriterien.
+    
+    Args:
+        members_data: Clan-Mitglieder Daten von der API
+        river_data: Aktuelle River Race Daten von der API
+        sort_by: Sortierkriterium (spenden, kriegsangriffe, kriegspunkte, gesamt, trophäenpfad)
+        limit: Anzahl der anzuzeigenden Spieler (Standard: 10)
+    
+    Returns:
+        Formatierte HTML-Nachricht mit den inaktivsten Spielern
+    """
+    members_list = members_data.get("items", [])
+    
+    # River Race Daten für Spieler zusammenstellen
+    river_participants = {}
+    clan = river_data.get("clan", {})
+    for p in clan.get("participants", []):
+        tag = (p.get("tag") or "").upper().lstrip("#")
+        river_participants[tag] = p
+    
+    # Berechne Inaktivitäts-Scores für jeden Spieler
+    player_scores = []
+    
+    for member in members_list:
+        tag = (member.get("tag") or "").upper().lstrip("#")
+        name = member.get("name", "Unbekannt")
+        
+        # Spenden (niedrigere Werte = inaktiver)
+        donations = int(member.get("donations", 0))
+        
+        # River Race Daten
+        river_info = river_participants.get(tag, {})
+        decks_used = int(river_info.get("decksUsed", 0))
+        fame = int(river_info.get("fame", 0))
+        boat_attacks = int(river_info.get("boatAttacks", 0))
+        
+        # Trophäen (keine direkte Inaktivität, aber niedriger Rang kann ein Hinweis sein)
+        trophies = int(member.get("trophies", 0))
+        clan_rank = int(member.get("clanRank", 50))
+        
+        # Letzte Online-Zeit
+        last_seen = parse_sc_time(member.get("lastSeen", ""))
+        days_offline = 0
+        if last_seen:
+            delta = datetime.now(timezone.utc) - last_seen
+            days_offline = delta.total_seconds() / 86400
+        
+        # Berechne verschiedene Inaktivitäts-Scores
+        # Je höher der Score, desto inaktiver
+        
+        # Spenden-Score (invertiert, da weniger Spenden = inaktiver)
+        donations_score = 1000 - donations  # Max 1000 Punkte für 0 Spenden
+        
+        # Kriegsangriffe-Score (weniger Decks verwendet = inaktiver)
+        war_attacks_score = (config.MAX_DECKS_PER_DAY * 2 - decks_used) * 100  # Max 8 Decks möglich
+        
+        # Kriegspunkte-Score (weniger Fame = inaktiver)
+        war_points_score = 2000 - fame  # Max 2000 bei 0 Fame
+        
+        # Trophäenpfad-Score (basiert auf Clan-Rang und Trophäen)
+        trophy_score = clan_rank * 10 + (10000 - min(trophies, 10000)) / 10
+        
+        # Gesamt-Score (kombiniert alle Faktoren)
+        # Gewichtung: Kriegsaktivität am wichtigsten, dann Spenden
+        total_score = (
+            war_attacks_score * 0.35 +      # Kriegsangriffe 35%
+            war_points_score * 0.30 +        # Kriegspunkte 30%
+            donations_score * 0.20 +         # Spenden 20%
+            days_offline * 5 +               # Offline-Zeit 10% (5 Punkte pro Tag)
+            trophy_score * 0.05              # Trophäen/Rang 5%
+        )
+        
+        player_scores.append({
+            "name": name,
+            "tag": tag,
+            "donations": donations,
+            "donations_received": int(member.get("donationsReceived", 0)),
+            "decks_used": decks_used,
+            "fame": fame,
+            "boat_attacks": boat_attacks,
+            "trophies": trophies,
+            "clan_rank": clan_rank,
+            "days_offline": days_offline,
+            "last_seen": member.get("lastSeen", ""),
+            "donations_score": donations_score,
+            "war_attacks_score": war_attacks_score,
+            "war_points_score": war_points_score,
+            "trophy_score": trophy_score,
+            "total_score": total_score,
+        })
+    
+    # Sortiere nach dem gewählten Kriterium
+    sort_key_map = {
+        "spenden": "donations_score",
+        "kriegsangriffe": "war_attacks_score",
+        "kriegspunkte": "war_points_score",
+        "trophäenpfad": "trophy_score",
+        "gesamt": "total_score",
+    }
+    
+    sort_key = sort_key_map.get(sort_by.lower(), "total_score")
+    player_scores.sort(key=lambda x: x[sort_key], reverse=True)
+    
+    # Hole die Top N inaktivsten Spieler
+    inactive_players = player_scores[:limit]
+    
+    # Formatiere die Ausgabe
+    sort_name_map = {
+        "spenden": "Spenden",
+        "kriegsangriffe": "Kriegsangriffe",
+        "kriegspunkte": "Kriegspunkte",
+        "trophäenpfad": "Trophäenpfad",
+        "gesamt": "Gesamt-Aktivität",
+    }
+    
+    criterion = sort_name_map.get(sort_by.lower(), "Gesamt-Aktivität")
+    
+    lines = [
+        f"<b>🔻 Top {len(inactive_players)} Inaktivste Spieler</b>",
+        f"Sortiert nach: <b>{criterion}</b>",
+        f""
+    ]
+    
+    for i, player in enumerate(inactive_players, 1):
+        name = player["name"]
+        
+        # Basis-Info
+        info_parts = []
+        
+        if sort_by.lower() in ["spenden", "gesamt"]:
+            don = player["donations"]
+            rec = player["donations_received"]
+            info_parts.append(f"💰 {don}/{rec}")
+        
+        if sort_by.lower() in ["kriegsangriffe", "kriegspunkte", "gesamt"]:
+            decks = player["decks_used"]
+            fame = player["fame"]
+            boats = player["boat_attacks"]
+            info_parts.append(f"⚔️ {decks}D {boats}B {fame}F")
+        
+        if sort_by.lower() in ["trophäenpfad", "gesamt"]:
+            trophies = player["trophies"]
+            rank = player["clan_rank"]
+            info_parts.append(f"🏆 {trophies} (#{rank})")
+        
+        # Letzte Aktivität
+        last_seen_str = ago_str(parse_sc_time(player["last_seen"]))
+        
+        info_line = " | ".join(info_parts)
+        lines.append(f"{i}. <b>{name}</b>")
+        lines.append(f"   {info_line}")
+        lines.append(f"   🕐 Zuletzt: {last_seen_str}")
+        
+        if i < len(inactive_players):
+            lines.append("")
+    
+    lines.extend([
+        "",
+        "<b>📊 Legende:</b>",
+        "💰 Spenden/Erhalten | ⚔️ Decks/Boote/Fame | 🏆 Trophäen (Rang)",
+        "",
+        f"<i>Weitere Sortierungen: /inaktiv [spenden|kriegsangriffe|kriegspunkte|trophäenpfad]</i>"
+    ])
+    
+    return "\n".join(lines)[:config.MAX_MESSAGE_LENGTH]
+
