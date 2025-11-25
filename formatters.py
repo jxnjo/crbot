@@ -93,8 +93,8 @@ def fmt_startup_message(version_dict: dict) -> str:
         f"{'📝 ' + version_dict['msg'] if version_dict['msg'] else ''}"
     )
 
-def fmt_clan(clan_data: Dict[str, Any], fallback_tag: str) -> str:
-    """Formatiert Clan-Informationen."""
+def fmt_clan(clan_data: Dict[str, Any], fallback_tag: str, local_rank: Optional[int] = None) -> str:
+    """Formatiert erweiterte Clan-Informationen."""
     name = clan_data.get("name", "Unbekannt")
     tag = clan_data.get("tag", f"#{fallback_tag}")
     members = clan_data.get("members", "?")
@@ -102,15 +102,127 @@ def fmt_clan(clan_data: Dict[str, Any], fallback_tag: str) -> str:
     req = clan_data.get("requiredTrophies", "?")
     desc = (clan_data.get("description") or "").strip()
     
-    if len(desc) > 400:
-        desc = desc[:400] + "…"
+    # Erweiterte Informationen
+    location = clan_data.get("location", {})
+    location_name = location.get("name", "Unbekannt") if location else "Unbekannt"
+    country_code = location.get("countryCode", "") if location else ""
     
-    return (
-        f"<b>{name}</b> ({tag})\n"
-        f"👥 Mitglieder: <b>{members}/{config.MAX_CLAN_MEMBERS}</b>\n"
-        f"🏆 Clan-Trophäen: <b>{score}</b>\n"
-        f"🔑 Mindest-Trophäen: <b>{req}</b>\n—\n{desc}"
-    )
+    badge_id = clan_data.get("badgeId", "")
+    clan_war_trophies = clan_data.get("clanWarTrophies", 0)
+    
+    # Berechne Durchschnittswerte
+    avg_trophies = 0
+    if isinstance(score, (int, float)) and isinstance(members, (int, float)) and members > 0:
+        avg_trophies = int(score / members)
+    
+    # Member List für zusätzliche Statistiken
+    member_list = clan_data.get("memberList", [])
+    
+    # Statistiken der Mitglieder
+    member_stats = {
+        "leader_count": 0,
+        "co_leader_count": 0,
+        "elder_count": 0,
+        "member_count": 0,
+        "total_donations": 0,
+        "avg_level": 0,
+        "highest_trophies": 0,
+        "lowest_trophies": float('inf'),
+    }
+    
+    if member_list:
+        total_level = 0
+        for member in member_list:
+            role = member.get("role", "member")
+            if role == "leader":
+                member_stats["leader_count"] += 1
+            elif role == "coLeader":
+                member_stats["co_leader_count"] += 1
+            elif role == "elder":
+                member_stats["elder_count"] += 1
+            else:
+                member_stats["member_count"] += 1
+            
+            # Spendenstatistiken
+            member_stats["total_donations"] += int(member.get("donations", 0))
+            
+            # Level-Statistiken
+            level = int(member.get("expLevel", 1))
+            total_level += level
+            
+            # Trophäen-Statistiken
+            trophies = int(member.get("trophies", 0))
+            member_stats["highest_trophies"] = max(member_stats["highest_trophies"], trophies)
+            member_stats["lowest_trophies"] = min(member_stats["lowest_trophies"], trophies)
+        
+        member_stats["avg_level"] = int(total_level / len(member_list))
+        
+        # Falls keine gültigen Trophäen gefunden
+        if member_stats["lowest_trophies"] == float('inf'):
+            member_stats["lowest_trophies"] = 0
+    
+    # Formatiere Beschreibung
+    if len(desc) > 300:
+        desc = desc[:300] + "…"
+    
+    # Flaggen-Emoji für bekannte Länder
+    flag_emojis = {
+        "CH": "🇨🇭", "DE": "🇩🇪", "AT": "🇦🇹", "FR": "🇫🇷", "IT": "🇮🇹",
+        "US": "🇺🇸", "GB": "🇬🇧", "CA": "🇨🇦", "AU": "🇦🇺", "NL": "🇳🇱",
+        "ES": "🇪🇸", "SE": "🇸🇪", "NO": "🇳🇴", "DK": "🇩🇰", "FI": "🇫🇮"
+    }
+    flag = flag_emojis.get(country_code, "🌍")
+    
+    lines = [
+        f"🏛️ <b>{name}</b> ({tag})",
+        f"{flag} <b>Region:</b> {location_name}",
+    ]
+    
+    # Lokale Platzierung hinzufügen falls verfügbar
+    if local_rank is not None:
+        lines.append(f"🥇 <b>Lokale Platzierung:</b> #{local_rank}")
+    
+    lines.extend([
+        "",
+        f"👥 <b>Mitglieder:</b> {members}/{config.MAX_CLAN_MEMBERS}",
+        f"🏆 <b>Clan-Trophäen:</b> {score:,}".replace(',', '.') if isinstance(score, (int, float)) else f"🏆 <b>Clan-Trophäen:</b> {score}",
+        f"⚔️ <b>Clan-War-Trophäen:</b> {clan_war_trophies:,}".replace(',', '.') if clan_war_trophies else "⚔️ <b>Clan-War-Trophäen:</b> 0",
+        f"🔑 <b>Mindest-Trophäen:</b> {req:,}".replace(',', '.') if isinstance(req, (int, float)) else f"🔑 <b>Mindest-Trophäen:</b> {req}",
+    ])
+    
+    if avg_trophies > 0:
+        lines.append(f"📊 <b>Ø Trophäen/Mitglied:</b> {avg_trophies:,}".replace(',', '.'))
+    
+    # Mitglieder-Hierarchie
+    if member_list:
+        hierarchy_parts = []
+        if member_stats["leader_count"] > 0:
+            hierarchy_parts.append(f"👑{member_stats['leader_count']}")
+        if member_stats["co_leader_count"] > 0:
+            hierarchy_parts.append(f"🔥{member_stats['co_leader_count']}")
+        if member_stats["elder_count"] > 0:
+            hierarchy_parts.append(f"⭐{member_stats['elder_count']}")
+        if member_stats["member_count"] > 0:
+            hierarchy_parts.append(f"👤{member_stats['member_count']}")
+        
+        if hierarchy_parts:
+            lines.append(f"👑 <b>Hierarchie:</b> {' | '.join(hierarchy_parts)}")
+        
+        # Weitere Statistiken
+        lines.extend([
+            "",
+            f"📈 <b>Mitglieder-Statistiken:</b>",
+            f"• Höchste Trophäen: <b>{member_stats['highest_trophies']:,}</b>".replace(',', '.'),
+            f"• Niedrigste Trophäen: <b>{member_stats['lowest_trophies']:,}</b>".replace(',', '.'),
+            f"• Durchschnittslevel: <b>{member_stats['avg_level']}</b>",
+            f"• Wochensumme Spenden: <b>{member_stats['total_donations']:,}</b>".replace(',', '.')
+        ])
+    
+    # Beschreibung
+    if desc:
+        lines.extend(["", f"📝 <b>Beschreibung:</b>", desc])
+    
+    return "\n".join(lines)
 
 def fmt_open_decks_overview(rr: Dict[str, Any], my_tag_nohash: str, max_decks: int = None) -> str:
     """Formatiert Übersicht der offenen Angriffe."""
@@ -385,20 +497,225 @@ def _format_points_rows(rows: list[dict]) -> str:
     
     return "\n".join(lines) if lines else "—"
 
+def fmt_player_details(player_name: str, members_data: Dict[str, Any], 
+                      river_data: Dict[str, Any], river_log_data: Dict[str, Any]) -> str:
+    """
+    Formatiert detaillierte Historie eines Spielers.
+    
+    Args:
+        player_name: Name des Spielers
+        members_data: Clan-Mitglieder Daten
+        river_data: Aktuelle River Race Daten
+        river_log_data: River Race Historie
+    
+    Returns:
+        str: Formatierte HTML-Nachricht mit Spieler-Details
+    """
+    # Spieler in Mitgliederliste finden
+    player_info = None
+    for member in members_data.get('items', []):
+        if member.get('name', '').lower() == player_name.lower():
+            player_info = member
+            break
+    
+    if not player_info:
+        return f"❌ Spieler '{player_name}' nicht im Clan gefunden."
+    
+    # Rolle-Emoji mapping
+    role_emojis = {
+        "leader": "👑",
+        "coLeader": "🔥", 
+        "elder": "⭐",
+        "member": "👤"
+    }
+    
+    player_tag = player_info.get('tag', '')
+    role = player_info.get('role', 'member')
+    role_emoji = role_emojis.get(role, '👤')
+    trophies = player_info.get('trophies', 0)
+    donations = player_info.get('donations', 0)
+    donations_received = player_info.get('donationsReceived', 0)
+    clan_rank = player_info.get('clanRank', 0)
+    last_seen = parse_sc_time(player_info.get('lastSeen', ''))
+    
+    # Letzte Aktivität berechnen
+    if last_seen:
+        time_diff = datetime.now(timezone.utc) - last_seen
+        if time_diff.days > 0:
+            last_seen_str = f"vor {time_diff.days} T"
+        elif time_diff.seconds >= 3600:
+            hours = time_diff.seconds // 3600
+            last_seen_str = f"vor {hours} Std"
+        else:
+            minutes = time_diff.seconds // 60
+            last_seen_str = f"vor {minutes} Min"
+    else:
+        last_seen_str = "Unbekannt"
+    
+    # Aktuelle River Race Daten
+    current_participant = None
+    for participant in river_data.get('clan', {}).get('participants', []):
+        if participant.get('name', '').lower() == player_name.lower():
+            current_participant = participant
+            break
+    
+    current_fame = current_participant.get('fame', 0) if current_participant else 0
+    current_decks = current_participant.get('decksUsed', 0) if current_participant else 0
+    current_boats = current_participant.get('boatAttacks', 0) if current_participant else 0
+    
+    # River Race Historie sammeln
+    race_history = []
+    total_fame = 0
+    total_decks = 0
+    total_boats = 0
+    
+    # Clan-Tag ist "RLPR02L0" aus der Config
+    from config import config
+    clan_tag = config.CLAN_TAG
+    
+    for i, race in enumerate(river_log_data.get('items', [])[:20]):
+        found_in_race = False
+        for clan_data in race.get('standings', []):
+            if clan_data.get('clan', {}).get('tag') == f"#{clan_tag}":
+                for participant in clan_data.get('clan', {}).get('participants', []):
+                    if participant.get('name', '').lower() == player_name.lower():
+                        fame = participant.get('fame', 0)
+                        decks = participant.get('decksUsed', 0)
+                        boats = participant.get('boatAttacks', 0)
+                        
+                        race_history.append({
+                            'season': race.get('seasonId', 'N/A'),
+                            'section': race.get('sectionIndex', 'N/A'),
+                            'fame': fame,
+                            'decks': decks,
+                            'boats': boats,
+                            'date': race.get('createdDate', '')
+                        })
+                        
+                        total_fame += fame
+                        total_decks += decks
+                        total_boats += boats
+                        found_in_race = True
+                        break
+                break
+        
+        if not found_in_race:
+            # Spieler hat nicht teilgenommen
+            race_history.append({
+                'season': race.get('seasonId', 'N/A'),
+                'section': race.get('sectionIndex', 'N/A'),
+                'fame': 0,
+                'decks': 0,
+                'boats': 0,
+                'date': race.get('createdDate', ''),
+                'absent': True
+            })
+    
+    # Statistiken berechnen
+    races_participated = len([r for r in race_history if not r.get('absent', False)])
+    races_total = len(race_history)
+    participation_rate = (races_participated / races_total * 100) if races_total > 0 else 0
+    avg_fame = total_fame / races_participated if races_participated > 0 else 0
+    avg_decks = total_decks / races_participated if races_participated > 0 else 0
+    
+    # Aktivitäts-Trend (letzte 5 vs vorherige 5 Races)
+    recent_races = race_history[:5]
+    older_races = race_history[5:10] if len(race_history) > 5 else []
+    
+    recent_fame = sum(r['fame'] for r in recent_races if not r.get('absent', False))
+    older_fame = sum(r['fame'] for r in older_races if not r.get('absent', False))
+    
+    if older_fame > 0 and recent_fame > older_fame:
+        trend = "📈 Steigend"
+    elif older_fame > 0 and recent_fame < older_fame:
+        trend = "📉 Fallend"
+    elif recent_fame > 0:
+        trend = "🔄 Stabil"
+    else:
+        trend = "😴 Inaktiv"
+    
+    # Nachricht formatieren
+    lines = [
+        f"<b>📊 Spieler-Details: {role_emoji} {player_info.get('name', 'Unbekannt')}</b>",
+        f"🏷️ Tag: <code>{player_tag}</code>",
+        f"🏆 Trophäen: {trophies:,} (Rang #{clan_rank})",
+        f"💰 Spenden: {donations}/{donations_received}",
+        f"🕐 Zuletzt aktiv: {last_seen_str}",
+        "",
+        "<b>⚔️ Aktuelle River Race:</b>",
+        f"🎯 Fame: {current_fame:,}",
+        f"🃏 Decks: {current_decks}/4",
+        f"🚢 Boot-Angriffe: {current_boats}",
+        "",
+        "<b>📈 Gesamt-Statistiken:</b>",
+        f"🏁 Teilnahme: {races_participated}/{races_total} ({participation_rate:.1f}%)",
+        f"⭐ Gesamt Fame: {total_fame:,}",
+        f"🎲 Gesamt Decks: {total_decks}",
+        f"⚓ Gesamt Boot-Angriffe: {total_boats}",
+        f"📊 Ø Fame/Race: {avg_fame:.0f}",
+        f"🎯 Ø Decks/Race: {avg_decks:.1f}",
+        f"📉 Trend: {trend}",
+        "",
+        f"<b>📜 River Race Historie (letzte {len(race_history)} Races):</b>"
+    ]
+    
+    # Race-by-Race Historie
+    for i, race in enumerate(race_history):
+        race_num = i + 1
+        season = race['season']
+        section = race['section']
+        
+        if race.get('absent', False):
+            lines.append(f"{race_num:2d}. S{season}-{section}: ❌ <i>Nicht teilgenommen</i>")
+        else:
+            fame = race['fame']
+            decks = race['decks']
+            boats = race['boats']
+            
+            # Aktivitäts-Indikator
+            if fame == 0 and decks == 0 and boats == 0:
+                indicator = "😴"
+            elif fame >= 1000 or decks >= 3:
+                indicator = "🔥"
+            elif fame >= 500 or decks >= 2:
+                indicator = "⚡"
+            else:
+                indicator = "💤"
+            
+            lines.append(f"{race_num:2d}. S{season}-{section}: {indicator} {fame}F {decks}D {boats}B")
+    
+    lines.extend([
+        "",
+        "<b>📋 Legende:</b>",
+        "🔥 Sehr aktiv | ⚡ Aktiv | 💤 Wenig aktiv | 😴 Inaktiv",
+        "F=Fame, D=Decks, B=Boot-Angriffe",
+        "",
+        "💡 <i>Tipp: Verwende /inaktiv für Clan-Übersicht</i>"
+    ])
+    
+    return "\n".join(lines)
+
 
 def fmt_inactive_players(members_data: Dict[str, Any], river_data: Dict[str, Any], 
-                         sort_by: str = "gesamt", limit: int = 10) -> str:
+                         river_log_data: Dict[str, Any] = None, sort_by: str = "gesamt", limit: int = 10) -> str:
     """
     Formatiert eine Liste der inaktivsten Spieler basierend auf verschiedenen Kriterien.
     
     Args:
         members_data: Clan-Mitglieder Daten von der API
         river_data: Aktuelle River Race Daten von der API
+        river_log_data: River Race Historie (optional, für erweiterte Analyse)
         sort_by: Sortierkriterium (spenden, kriegsangriffe, kriegspunkte, gesamt, trophäenpfad)
         limit: Anzahl der anzuzeigenden Spieler (Standard: 10)
     
     Returns:
         Formatierte HTML-Nachricht mit den inaktivsten Spielern
+    
+    Datenquellen und Zeitspannen:
+    - Spenden: Aktuelle Saison (wird wöchentlich zurückgesetzt)
+    - Kriegsangriffe/Kriegspunkte: Aktuelle River Race Woche + Historie (bis zu 50 Wochen)
+    - Letzte Aktivität: Unbegrenzt (soweit verfügbar)
+    - Trophäen/Rang: Aktueller Stand
     """
     members_list = members_data.get("items", [])
     
@@ -409,12 +726,19 @@ def fmt_inactive_players(members_data: Dict[str, Any], river_data: Dict[str, Any
         tag = (p.get("tag") or "").upper().lstrip("#")
         river_participants[tag] = p
     
+    # Historische River Race Daten verarbeiten (falls verfügbar)
+    historical_performance = {}
+    if river_log_data:
+        from clash import _aggregate_war_history
+        historical_performance = _aggregate_war_history(river_log_data, "")
+    
     # Berechne Inaktivitäts-Scores für jeden Spieler
     player_scores = []
     
     for member in members_list:
         tag = (member.get("tag") or "").upper().lstrip("#")
         name = member.get("name", "Unbekannt")
+        role = member.get("role", "member")
         
         # Spenden (niedrigere Werte = inaktiver)
         donations = int(member.get("donations", 0))
@@ -442,11 +766,32 @@ def fmt_inactive_players(members_data: Dict[str, Any], river_data: Dict[str, Any
         # Spenden-Score (invertiert, da weniger Spenden = inaktiver)
         donations_score = 1000 - donations  # Max 1000 Punkte für 0 Spenden
         
-        # Kriegsangriffe-Score (weniger Decks verwendet = inaktiver)
-        war_attacks_score = (config.MAX_DECKS_PER_DAY * 2 - decks_used) * 100  # Max 8 Decks möglich
+        # Historische Kriegsleistung einbeziehen (falls verfügbar)
+        historical_wars = 0
+        historical_decks = 0
+        historical_fame = 0
+        if tag in historical_performance:
+            hist = historical_performance[tag]
+            historical_wars = hist.get("wars", 0)
+            historical_decks = hist.get("decks", 0)
+            historical_fame = hist.get("fame", 0)
         
-        # Kriegspunkte-Score (weniger Fame = inaktiver)
-        war_points_score = 2000 - fame  # Max 2000 bei 0 Fame
+        # Kriegsangriffe-Score (kombiniert aktuelle + historische Daten)
+        total_possible_decks = config.MAX_DECKS_PER_DAY * 2  # Aktuell
+        if historical_wars > 0:
+            avg_decks_per_war = historical_decks / historical_wars if historical_wars > 0 else 0
+            expected_decks = min(avg_decks_per_war * 2, total_possible_decks)  # Erwartung basierend auf Historie
+        else:
+            expected_decks = total_possible_decks
+        war_attacks_score = (expected_decks - decks_used) * 100
+        
+        # Kriegspunkte-Score (kombiniert aktuelle + historische Durchschnitte)
+        if historical_wars > 0:
+            avg_fame_per_war = historical_fame / historical_wars if historical_wars > 0 else 0
+            expected_fame = min(avg_fame_per_war, 2000)  # Erwartung basierend auf Historie
+        else:
+            expected_fame = 800  # Durchschnittliche Erwartung
+        war_points_score = expected_fame - fame
         
         # Trophäenpfad-Score (basiert auf Clan-Rang und Trophäen)
         trophy_score = clan_rank * 10 + (10000 - min(trophies, 10000)) / 10
@@ -464,6 +809,7 @@ def fmt_inactive_players(members_data: Dict[str, Any], river_data: Dict[str, Any
         player_scores.append({
             "name": name,
             "tag": tag,
+            "role": role,
             "donations": donations,
             "donations_received": int(member.get("donationsReceived", 0)),
             "decks_used": decks_used,
@@ -512,8 +858,18 @@ def fmt_inactive_players(members_data: Dict[str, Any], river_data: Dict[str, Any
         f""
     ]
     
+    # Rolle-zu-Emoji Mapping
+    role_emojis = {
+        "leader": "👑",
+        "coLeader": "🔥", 
+        "elder": "⭐",
+        "member": "👤"
+    }
+    
     for i, player in enumerate(inactive_players, 1):
         name = player["name"]
+        role = player["role"]
+        role_emoji = role_emojis.get(role, "👤")
         
         # Basis-Info
         info_parts = []
@@ -538,17 +894,28 @@ def fmt_inactive_players(members_data: Dict[str, Any], river_data: Dict[str, Any
         last_seen_str = ago_str(parse_sc_time(player["last_seen"]))
         
         info_line = " | ".join(info_parts)
-        lines.append(f"{i}. <b>{name}</b>")
+        lines.append(f"{i}. {role_emoji} <b>{name}</b>")
         lines.append(f"   {info_line}")
         lines.append(f"   🕐 Zuletzt: {last_seen_str}")
+        lines.append(f"   📊 <code>/details {name}</code>")
         
         if i < len(inactive_players):
             lines.append("")
     
+    # Datenquellen-Info
+    data_info = "📊 <b>Datenquellen:</b>\n"
+    if river_log_data:
+        wars_analyzed = len(river_log_data.get("items", []))
+        data_info += f"• Kriegshistorie: {wars_analyzed} River Races analysiert\n"
+    data_info += "• Spenden: Aktuelle Saison\n• Aktivität: Seit Clan-Beitritt\n• Trophäen: Aktueller Stand"
+    
     lines.extend([
         "",
         "<b>📊 Legende:</b>",
+        "👑 Anführer | 🔥 Vize-Anführer | ⭐ Ältester | 👤 Mitglied",
         "💰 Spenden/Erhalten | ⚔️ Decks/Boote/Fame | 🏆 Trophäen (Rang)",
+        "",
+        data_info,
         "",
         f"<i>Weitere Sortierungen: /inaktiv [spenden|kriegsangriffe|kriegspunkte|trophäenpfad]</i>"
     ])

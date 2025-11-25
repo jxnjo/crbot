@@ -97,9 +97,26 @@ class ClashHandler(BaseHandler):
         pass
 
 class ClanInfoHandler(ClashHandler):
-    """Handler für Clan-Informationen."""
+    """Handler für Clan-Informationen mit Ranking."""
+    
+    async def execute(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+        try:
+            # Hole Clan-Daten und Ranking parallel
+            clan_data = await self.clash.get_clan()
+            
+            # Versuche Ranking zu laden (falls verfügbar)
+            ranking = None
+            try:
+                ranking = await self.clash.get_clan_ranking()
+            except Exception as e:
+                self.log.warning(f"Ranking konnte nicht geladen werden: {e}")
+            
+            return self.formatter_func(clan_data, config.CLAN_TAG, ranking)
+        except Exception as e:
+            raise APIError(f"Clash Royale API Fehler: {e}", "Fehler beim Abrufen der Clash Royale Daten.")
     
     async def get_data(self, context: ContextTypes.DEFAULT_TYPE) -> Any:
+        # Diese Methode wird nicht mehr verwendet, da wir execute() überschrieben haben
         return await self.clash.get_clan()
 
 class MembersHandler(ClashHandler):

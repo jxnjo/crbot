@@ -17,7 +17,7 @@ from clash import ClashClient, _aggregate_war_history, spy_make_messages
 from formatters import (
     fmt_clan, fmt_activity_list, fmt_river_scoreboard, fmt_donations_leaderboard,
     fmt_open_decks_overview, fmt_war_history_summary, fmt_war_history_player_multi,
-    fmt_startup_message, fmt_inactive_players
+    fmt_startup_message, fmt_inactive_players, fmt_player_details
 )
 
 # Setup Logging
@@ -70,6 +70,7 @@ class CRBot:
         self.app.add_handler(CommandHandler("spenden", ParameterizedHandler("spenden", self._spenden_handler).handle))
         self.app.add_handler(CommandHandler("krieghistorie", ParameterizedHandler("krieghistorie", self._krieghistorie_handler).handle))
         self.app.add_handler(CommandHandler("inaktiv", ParameterizedHandler("inaktiv", self._inaktiv_handler).handle))
+        self.app.add_handler(CommandHandler("details", ParameterizedHandler("details", self._details_handler).handle))
         self.app.add_handler(CommandHandler("spion", MultiMessageHandler("spion", self._spion_handler).handle))
 
     async def _krieginfo_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
@@ -132,9 +133,16 @@ class CRBot:
 
     async def _inaktiv_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
         """Handler für /inaktiv mit optionalem Sortierkriterium."""
-        # Hole beide Datenquellen: Mitglieder und aktuelle River Race
+        # Hole alle Datenquellen: Mitglieder, aktuelle River Race und Historie
         members = await self.clash.get_members()
         river_race = await self.clash.get_current_river_fresh(attempts=2)
+        
+        # Hole auch historische Daten für bessere Bewertung
+        try:
+            river_log = await self.clash.get_river_log(limit=50)  # Bis zu 50 Wochen Historie
+        except Exception as e:
+            log.warning(f"Konnte River Race Historie nicht laden: {e}")
+            river_log = None
         
         # Bestimme Sortierkriterium
         sort_by = "gesamt"  # Standard
@@ -144,7 +152,24 @@ class CRBot:
             if arg in valid_sorts:
                 sort_by = arg
         
-        return fmt_inactive_players(members, river_race, sort_by=sort_by, limit=10)
+        return fmt_inactive_players(members, river_race, river_log, sort_by=sort_by, limit=10)
+
+    async def _details_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> str:
+        """Handler für /details - detaillierte Spieler-Historie."""
+        if not context.args:
+            return ("❌ Bitte gib einen Spielernamen an.\n\n"
+                   "<b>Verwendung:</b> <code>/details [Spielername]</code>\n\n"
+                   "<b>Beispiel:</b> <code>/details sali</code>\n\n"
+                   "💡 <i>Tipp: Verwende zuerst /inaktiv um Spielernamen zu finden</i>")
+        
+        player_name = ' '.join(context.args)
+        
+        # Daten laden
+        members = await self.clash.get_members()
+        river_race = await self.clash.get_current_river_fresh(attempts=2)
+        river_log = await self.clash.get_river_log(limit=20)
+        
+        return fmt_player_details(player_name, members, river_race, river_log)
 
     async def _spion_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> list[str]:
         """Handler für /spion - Gegner-Spionage mit historischer Analyse."""

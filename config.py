@@ -88,6 +88,7 @@ COMMANDS_GROUP = [
     BotCommand("aktivitaet", "⚡ Zeigt Aktivität der Clan-Mitglieder"),
     BotCommand("online", "🟢 Zeigt aktuell online Mitglieder"),
     BotCommand("inaktiv", "🔻 Zeigt inaktivste Spieler (optional: spenden|kriegsangriffe|kriegspunkte|trophäenpfad)"),
+    BotCommand("details", "📊 Detaillierte Historie eines Spielers (nach /inaktiv verwenden)"),
     BotCommand("offeneangriffe", "⚔️ Zeigt offene Deck-Angriffe im River Race"),
     BotCommand("krieginfo", "🏰 Krieg-Informationen (optional: Anzahl Tage)"),
     BotCommand("krieginfoheute", "📅 Heutige Krieg-Informationen"),

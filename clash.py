@@ -107,6 +107,37 @@ class ClashClient:
         except Exception as e:
             raise APIError(f"Unerwarteter Fehler: {e}", "Ein unerwarteter Fehler ist beim API-Aufruf aufgetreten.")
 
+    async def get_clan_ranking(self, location_id: str = "57000226") -> Optional[int]:
+        """
+        Sucht die Platzierung des Clans in den lokalen Rankings.
+        
+        Args:
+            location_id: Location ID (Standard: 57000226 für Schweiz)
+            
+        Returns:
+            Rang des Clans oder None falls nicht in Top 200
+        """
+        url = f"{self.BASE}/locations/{location_id}/rankings/clans"
+        
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(url, headers=self.headers)
+                response.raise_for_status()
+                data = response.json()
+                
+                # Suche unseren Clan in den Rankings
+                my_tag = self.clan_tag.upper()
+                for item in data.get("items", []):
+                    clan_tag = (item.get("tag") or "").upper().lstrip("#")
+                    if clan_tag == my_tag:
+                        return item.get("rank")
+                
+                return None  # Nicht in Top 200 gefunden
+                
+        except Exception as e:
+            logger.warning(f"Konnte Clan-Rankings nicht laden: {e}")
+            return None
+
     async def get_current_river(self, force: bool = True) -> Dict[str, Any]:
         """Holt aktuelle River Race Daten."""
         return await self._get(self._clan_path("/currentriverrace"), cache_bust=force)
